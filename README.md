@@ -63,3 +63,11 @@ Requires exactly 8 responses, each with `Key finding: YES|NO|INCONCLUSIVE` (case
 
 ## Security limitations
 Operates only inside project dir. No system-dir scanning, no registry, no PowerShell, no background processes, no browser automation, no network, no AI API calls, never executes pasted output as code.
+
+## AGENTFLOW VISUAL (dashboard)
+```bash
+pip install -e .
+python run.py          # 127.0.0.1:5001 — dark dashboard, SVG 9-node network
+python -m agentflow.web
+```
+Shares `.agentflow/state.db` with CLI. No internet needed, bind is 127.0.0.1 only.
