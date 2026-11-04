@@ -4,7 +4,7 @@ version = "1.0.0"
 description = "Manual multi-agent research/engineering pipeline orchestrator — no LLM API calls, manual copy-paste workflow"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["click>=8.1", "rich>=13.0"]
+dependencies = ["click>=8.1", "rich>=13.0", "flask>=3.0"]
 [project.optional-dependencies]
 clipboard = ["pyperclip>=1.8"]
 [project.scripts]
