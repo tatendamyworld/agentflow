@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentFlow — Visual Dashboard</title>
+<meta name="description" content="Dark tech dashboard for the AgentFlow nine-agent pipeline: Supervisor to Finch.">
+<link rel="stylesheet" href="../static/css/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to main content</a>
+
+<header class="topnav" role="banner">
+  <div class="topnav-inner">
+    <div class="brand">
+      <svg class="brand-mark" width="30" height="30" viewBox="0 0 30 30" aria-hidden="true" focusable="false">
+        <rect x="1" y="1" width="28" height="28" rx="7" fill="#0f172a" stroke="#38bdf8"></rect>
+        <circle cx="9" cy="15" r="3.2" fill="#38bdf8"></circle>
+        <circle cx="21" cy="15" r="3.2" fill="#a78bfa"></circle>
+        <line x1="12" y1="15" x2="18" y2="15" stroke="#64748b" stroke-width="1.6"></line>
+      </svg>
+      <span class="brand-name">AgentFlow</span>
+      <span class="brand-sub">Visual</span>
+    </div>
+
+    <div class="topnav-mission" aria-live="polite">
+      <span class="topnav-label">Mission</span>
+      <span id="nav-mission" class="topnav-mission-text">No mission selected</span>
+      <span id="nav-run-id" class="run-id"></span>
+    </div>
+
+    <div class="topnav-pills">
+      <span id="nav-status" class="pill pill-status" title="Run status">—</span>
+      <span id="nav-iteration" class="pill pill-iter" title="Current iteration">Iter —</span>
+      <span id="nav-api" class="pill pill-api" title="Backend API status">API …</span>
+    </div>
+
+    <nav class="topnav-links" aria-label="Dashboard sections">
+      <a href="#mission-overview" data-nav>Overview</a>
+      <a href="#network" data-nav>Network</a>
+      <a href="#hypotheses" data-nav>Hypotheses</a>
+      <a href="#finch" data-nav>Finch</a>
+      <a href="#history" data-nav>History</a>
+    </nav>
+
+    <button type="button" id="new-mission-btn" class="btn btn-primary">+ New Mission</button>
+  </div>
+</header>
+
+<div id="api-error" class="api-error" role="alert" hidden>
+  <strong>Backend unavailable.</strong> <span id="api-error-msg"></span>
+  <span class="api-error-hint">Showing last known / demo data. The dashboard keeps polling every 5s.</span>
+  <button type="button" id="api-error-dismiss" class="btn btn-ghost btn-small">Dismiss</button>
+</div>
+
+<div class="layout">
+  <main id="main" class="main" tabindex="-1">
+
+    <!-- Mission overview -->
+    <section id="mission-overview" class="panel" aria-labelledby="overview-title">
+      <div class="panel-head">
+        <h2 id="overview-title">Mission Overview</h2>
+        <span id="overview-updated" class="muted small"></span>
+      </div>
+      <div class="overview-grid">
+        <div class="overview-pct">
+          <span id="pct-complete" class="pct-num">0%</span>
+          <span class="pct-label">complete</span>
+        </div>
+        <div class="overview-bar-wrap">
+          <div id="progress-bar" class="progress" role="progressbar" aria-label="Mission completion"
+               aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div id="progress-fill" class="progress-fill"></div>
+          </div>
+          <ul class="stat-list">
+            <li><span class="stat-dot dot-completed"></span><span id="stat-completed">0 completed</span></li>
+            <li><span class="stat-dot dot-ready"></span><span id="stat-ready">0 ready</span></li>
+            <li><span class="stat-dot dot-waiting"></span><span id="stat-waiting">0 waiting</span></li>
+            <li><span class="stat-dot dot-pending"></span><span id="stat-pending">0 pending</span></li>
+            <li><span class="stat-dot dot-failed"></span><span id="stat-failed">0 failed</span></li>
+          </ul>
+        </div>
+        <dl class="overview-meta">
+          <div><dt>Goal</dt><dd id="meta-goal">—</dd></div>
+          <div><dt>Status</dt><dd id="meta-status">—</dd></div>
+          <div><dt>Iteration</dt><dd id="meta-iteration">—</dd></div>
+          <div><dt>Created</dt><dd id="meta-created">—</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <!-- SVG node network -->
+    <section id="network" class="panel" aria-labelledby="network-title">
+      <div class="panel-head">
+        <h2 id="network-title">Agent Network</h2>
+        <span class="muted small">9 agents · Supervisor → Finch · click a node to inspect</span>
+      </div>
+      <div class="network-wrap">
+        <svg id="agent-network" viewBox="0 0 1240 300" role="group"
+             aria-label="Agent network graph" preserveAspectRatio="xMidYMid meet"></svg>
+      </div>
+      <ul class="legend" aria-label="Status legend">
+        <li><span class="legend-swatch sw-pending"></span>Pending</li>
+        <li><span class="legend-swatch sw-ready"></span>Ready</li>
+        <li><span class="legend-swatch sw-waiting"></span>Waiting</li>
+        <li><span class="legend-swatch sw-completed"></span>Completed</li>
+        <li><span class="legend-swatch sw-failed"></span>Failed</li>
+        <li><span class="legend-swatch sw-selected"></span>Selected</li>
+      </ul>
+    </section>
+
+    <!-- Hypotheses -->
+    <section id="hypotheses" class="panel" aria-labelledby="hyp-title">
+      <div class="panel-head">
+        <h2 id="hyp-title">Hypotheses</h2>
+        <div class="panel-actions">
+          <button type="button" id="hyp-compare-btn" class="btn btn-ghost btn-small">Compare selected</button>
+          <span id="hyp-count" class="muted small"></span>
+        </div>
+      </div>
+      <p id="hyp-empty" class="muted">No hypotheses yet. Run Generation / Ranking, or the backend may not expose them.</p>
+      <div id="hyp-cards" class="hyp-cards"></div>
+      <div id="hyp-compare" class="hyp-compare" hidden aria-live="polite"></div>
+    </section>
+
+    <!-- Ranking -->
+    <section id="ranking" class="panel" aria-labelledby="rank-title">
+      <div class="panel-head"><h2 id="rank-title">Ranking</h2><span id="rank-note" class="muted small"></span></div>
+      <div class="table-wrap">
+        <table class="table" id="ranking-table">
+          <caption class="muted small">Ranked hypotheses (from Ranking agent output when available)</caption>
+          <thead><tr><th scope="col">#</th><th scope="col">Hypothesis</th><th scope="col">Score</th><th scope="col">Source</th><th scope="col">Status</th></tr></thead>
+          <tbody><tr><td colspan="5" class="muted">No ranking data yet.</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Crow / Falcon -->
+    <section id="crow-falcon" class="panel" aria-labelledby="cf-title">
+      <div class="panel-head"><h2 id="cf-title">Crow &amp; Falcon</h2></div>
+      <div class="tabs" role="tablist" aria-label="Crow and Falcon">
+        <button type="button" role="tab" id="tab-crow" aria-controls="panel-crow" aria-selected="true" class="tab is-active">Crow</button>
+        <button type="button" role="tab" id="tab-falcon" aria-controls="panel-falcon" aria-selected="false" class="tab">Falcon</button>
+      </div>
+      <div id="panel-crow" role="tabpanel" aria-labelledby="tab-crow" class="tab-panel">
+        <div class="panel-actions"><button type="button" class="btn btn-ghost btn-small" data-cf-copy="crow">Copy Crow output</button></div>
+        <pre id="crow-output" class="output-pre">—</pre>
+      </div>
+      <div id="panel-falcon" role="tabpanel" aria-labelledby="tab-falcon" class="tab-panel" hidden>
+        <div class="panel-actions"><button type="button" class="btn btn-ghost btn-small" data-cf-copy="falcon">Copy Falcon output</button></div>
+        <pre id="falcon-output" class="output-pre">—</pre>
+      </div>
+    </section>
+
+    <!-- Finch -->
+    <section id="finch" class="panel" aria-labelledby="finch-title">
+      <div class="panel-head">
+        <h2 id="finch-title">Finch — 8-Run Consensus</h2>
+        <span id="finch-count" class="muted small"></span>
+      </div>
+      <div id="consensus-banner" class="consensus-banner banner-neutral" role="status">No consensus yet.</div>
+      <div id="finch-chart" class="finch-chart" aria-label="Finch vote distribution"></div>
+      <div id="finch-cards" class="finch-cards"></div>
+      <form id="finch-form" class="finch-form">
+        <label for="finch-responses">Submit 8 Finch responses (one per run, each with “Key finding: YES|NO|INCONCLUSIVE”)</label>
+        <textarea id="finch-responses" rows="8" placeholder="Separate runs with a line containing only ---"></textarea>
+        <div class="btn-row">
+          <button type="submit" class="btn btn-primary">Run Finch consensus</button>
+          <span id="finch-msg" class="muted small" role="status"></span>
+        </div>
+      </form>
+    </section>
+
+    <!-- Timeline -->
+    <section id="timeline" class="panel" aria-labelledby="tl-title">
+      <div class="panel-head"><h2 id="tl-title">Timeline</h2></div>
+      <ol id="timeline-list" class="timeline"><li class="muted">No events yet.</li></ol>
+    </section>
+
+    <!-- History -->
+    <section id="history" class="panel" aria-labelledby="hist-title">
+      <div class="panel-head">
+        <h2 id="hist-title">History</h2>
+        <div class="panel-actions">
+          <label class="small muted">Compare:
+            <select id="compare-a" aria-label="Compare run A"></select>
+            <select id="compare-b" aria-label="Compare run B"></select>
+          </label>
+          <button type="button" id="compare-btn" class="btn btn-ghost btn-small">Compare</button>
+        </div>
+      </div>
+      <div id="history-list" class="history-list"><p class="muted">No history loaded.</p></div>
+      <div id="history-compare" class="history-compare" hidden></div>
+    </section>
+  </main>
+
+  <!-- Inspector -->
+  <aside id="inspector" class="panel inspector" aria-labelledby="insp-title">
+    <div class="panel-head">
+      <h2 id="insp-title">Inspector</h2>
+      <span id="insp-status" class="pill">—</span>
+    </div>
+    <p class="muted small" id="insp-meta">Select a node in the network.</p>
+
+    <h3 class="insp-h">Prompt</h3>
+    <pre id="insp-prompt" class="output-pre">—</pre>
+
+    <h3 class="insp-h"><label for="insp-output">Output / paste area</label></h3>
+    <textarea id="insp-output" rows="10" placeholder="Paste the agent output here, then Save."></textarea>
+
+    <div id="insp-top-wrap" hidden>
+      <label for="insp-top" class="insp-h">Top hypothesis (Ranking)</label>
+      <input type="text" id="insp-top" placeholder="Winning hypothesis text">
+    </div>
+
+    <div class="btn-row btn-row-wrap">
+      <button type="button" id="insp-generate" class="btn btn-primary">Generate</button>
+      <button type="button" id="insp-copy" class="btn btn-ghost">Copy</button>
+      <button type="button" id="insp-paste" class="btn btn-ghost">Paste</button>
+      <button type="button" id="insp-save" class="btn btn-primary">Save</button>
+      <button type="button" id="insp-retry" class="btn btn-warn">Retry</button>
+    </div>
+    <p id="insp-msg" class="muted small" role="status" aria-live="polite"></p>
+  </aside>
+</div>
+
+<footer class="footer">
+  <span>AgentFlow Visual · vanilla JS · offline-safe (no CDN) · polls every 5s</span>
+  <span id="poll-info" class="muted small">Last poll: —</span>
+</footer>
+
+<dialog id="new-mission-dialog" aria-labelledby="nm-title">
+  <form id="new-mission-form" method="dialog">
+    <h2 id="nm-title">New Mission</h2>
+    <label for="nm-goal">Goal</label>
+    <textarea id="nm-goal" rows="4" required placeholder="Describe the research / engineering objective…"></textarea>
+    <p id="nm-msg" class="muted small" role="status"></p>
+    <div class="btn-row">
+      <button type="submit" class="btn btn-primary">Create mission</button>
+      <button type="button" id="nm-cancel" class="btn btn-ghost">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="../static/js/graph.js"></script>
+<script src="../static/js/agents.js"></script>
+<script src="../static/js/dashboard.js"></script>
+<script src="../static/js/app.js"></script>
+</body>
+</html>
