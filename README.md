@@ -217,3 +217,19 @@ Complete mission history with full-fidelity Markdown (no truncation/fabrication)
 - **Export:** `GET /export.md` + `agentflow export` now share `agentflow/export.py::build_markdown` — mission details, per-iteration agent prompts + raw responses (backtick-safe fences), hypotheses (all fields), rankings (leaderboard/matches/events), Finch raw evaluations + history, consensus per iteration, iteration history/unresolved, workspace sections, archived executions. Raw responses never omitted.
 
 Tests: `tests/test_history_export.py` (5 tests). Full suite (`pytest tests/`): 104 passed.
+
+## PHASE 13 — CLI Integration (shared DB + engine)
+
+CLI and dashboard operate on one SQLite DB (`<project>/.agentflow/state.db`) and one workflow engine (`db` + `agents` + `ops` + `workflow` + `backend_models`) — never separate states. Verified commands:
+
+`new --goal`, `next`, `paste`, `status`, `resume RUN_ID`, `export --format md` (shared `export.py`), `set-top`, `copy STEP`, `diff A B`, `loop` (plus `finch`).
+
+Sync guarantees:
+- CLI `new` visible via `GET /runs` (web also mirrors `.current` so bare `paste/next` find it); web-created runs visible to `status/paste --run`.
+- CLI `next` delegates to `ops.build_prompt_preview` (same placeholder substitution as dashboard; no snippet-fabricated top).
+- CLI `paste` validates like web (invalid → `FAILED` recoverable, no save) and auto-parses workspace/hypotheses on save.
+- CLI `loop` generates fresh Supervisor prompt via `ops` (inheritance parity with web loop).
+- CLI `set-top` selects the matching stored hypothesis (`SELECTED` + `executions.top`); web `/save-top` does the same — both directions stay in sync.
+- `status/resume/diff` sync derived run status via `db.sync_run_status`/`progress_for` (same values as dashboard).
+
+Tests: `tests/test_cli.py` (5 tests, CLI↔web round-trip). Full suite (`pytest tests/`): 109 passed.

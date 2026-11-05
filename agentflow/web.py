@@ -471,6 +471,13 @@ def create_app(project="."):
         except Exception:
             pass
         payload = run_payload(db.get_run(run_id, project))
+        # CLI sync: mirror .current pointer so `agentflow paste/next` without --run finds this run
+        try:
+            _cur = pathlib.Path(project) / ".agentflow" / "current"
+            _cur.parent.mkdir(parents=True, exist_ok=True)
+            _cur.write_text(run_id, encoding="utf-8")
+        except Exception:
+            pass
         return jsonify({**payload, "run": payload}), 201
 
     @app.route("/api/runs/<run_id>", methods=["GET"])
@@ -882,7 +889,22 @@ def create_app(project="."):
             "top_hypothesis")
         if problem:
             return err(problem)
-        db.save_top_hypothesis(run_id, top, project)
+        # Mirror to Hypothesis Laboratory SELECTED when text matches a stored hypothesis (dashboard <-> CLI sync)
+        matched_id = None
+        try:
+            for h in backend_models.list_hypotheses(project, run_id, iteration=run["current_iteration"]):
+                title = (h.get("title") or "").strip()
+                if title and (title.lower() == top.strip().lower() or top.strip().lower() in title.lower()):
+                    matched_id = h["id"]; break
+        except Exception:
+            pass
+        if matched_id is not None:
+            try:
+                backend_models.select_hypothesis(project, run_id, matched_id)
+            except ValueError:
+                db.save_top_hypothesis(run_id, top, project)
+        else:
+            db.save_top_hypothesis(run_id, top, project)
         return jsonify(top_hypothesis=top, run_id=run_id,
                        execution=db.get_execution(run_id, "ranking",
                                                   project=project))
