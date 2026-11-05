@@ -614,12 +614,26 @@
       var opts = runs.map(function (r) { return '<option value="' + esc(r.id) + '">' + esc(r.id) + " — " + esc(String(r.goal || "").slice(0, 40)) + "</option>"; }).join("");
       selA.innerHTML = opts; selB.innerHTML = opts;
       if (runs.length > 1) selB.selectedIndex = 1;
-      if (!runs.length) { list.innerHTML = '<p class="muted">No history loaded.</p>'; return; }
+      if (!runs.length) { list.innerHTML = '<p class="muted">No missions yet.</p>'; return; }
       list.innerHTML = runs.map(function (r) {
-        return '<div class="history-item' + (r.id === ctx.state.runId ? " is-active" : "") + '" data-run="' + esc(r.id) + '" tabindex="0" role="button" aria-label="Open run ' + esc(r.id) + '">' +
+        var prog = r.progress != null ? Math.round(r.progress) : null;
+        var unfinished = prog != null ? prog < 100 : (r.status !== "COMPLETED" && r.status !== "ARCHIVED");
+        var badge = unfinished ? "Unfinished" : "Completed";
+        return '<div class="history-item' + (r.id === ctx.state.runId ? " is-active" : "") + '" data-run="' + esc(r.id) + '" tabindex="0" role="button" aria-label="Open ' + esc(badge.toLowerCase()) + ' mission ' + esc(r.id) + '">' +
           '<span class="goal"><strong>' + esc(r.id) + "</strong> · " + esc(r.goal || "—") + "</span>" +
-          '<span class="badge">' + esc(r.status || "—") + "</span><span class=\"muted small\">Iter " + esc(r.current_iteration || r.iteration || 1) + "</span></div>";
+          '<span class="badge">' + esc(badge) + "</span>" +
+          (prog != null ? '<span class="muted small">' + prog + "%</span>" : "") +
+          '<span class="muted small">Iter ' + esc(r.current_iteration || r.iteration || 1) + "</span>" +
+          '<span class="muted small">' + (unfinished ? "Resume" : "Inspect") + "</span></div>";
       }).join("");
+      var ex = $("export-selected");
+      if (ex && ctx.state.runId) { ex.href = "/api/runs/" + encodeURIComponent(ctx.state.runId) + "/export.md"; ex.setAttribute("download", "export-" + ctx.state.runId + ".md"); }
+      /* mission dossier pointer: loads research-history on selection (lazy) */
+      var det = $("history-detail");
+      if (ctx.state.runId && det) {
+        det.hidden = false;
+        det.innerHTML = "<h3>Mission details</h3><p class='muted small'>Open any mission above to inspect iterations. Export includes prompts, raw responses, hypotheses, rankings, Finch evaluations, consensus and iteration history.</p>";
+      }
     }
 
     var histList = $("history-list");
@@ -645,14 +659,19 @@
     });
     var cmp2 = $("compare-btn");
     if (cmp2) cmp2.addEventListener("click", function () {
-      var a = (ctx.state.runs || []).filter(function (r) { return r.id === $("compare-a").value; })[0] || {};
-      var b = (ctx.state.runs || []).filter(function (r) { return r.id === $("compare-b").value; })[0] || {};
+      var aid = $("compare-a").value, bid = $("compare-b").value;
       var box = $("history-compare"); box.hidden = false;
-      function row(k, va, vb) { return "<tr><th>" + k + "</th><td>" + esc(va || "—") + "</td><td>" + esc(vb || "—") + "</td></tr>"; }
-      box.innerHTML = "<h3>Run comparison</h3><table><thead><tr><th>Field</th><th>" + esc(a.id || "A") + "</th><th>" + esc(b.id || "B") + "</th></tr></thead><tbody>" +
-        row("Goal", a.goal, b.goal) + row("Status", a.status, b.status) +
-        row("Iteration", a.current_iteration || a.iteration, b.current_iteration || b.iteration) +
-        row("Created", a.created_at, b.created_at) + row("Updated", a.updated_at, b.updated_at) + "</tbody></table>";
+      ctx.api.diff(aid, bid).then(function (d) {
+        var dif = d.differences || {};
+        function row(k, va, vb) { return "<tr><th>" + k + "</th><td>" + esc(va || "—") + "</td><td>" + esc(vb || "—") + "</td></tr>"; }
+        box.innerHTML = "<h3>Mission comparison</h3><table><thead><tr><th>Field</th><th>" + esc(aid) + "</th><th>" + esc(bid) + "</th></tr></thead><tbody>" +
+          row("Goal", d.run_a && d.run_a.goal, d.run_b && d.run_b.goal) + row("Status", d.run_a && d.run_a.status, d.run_b && d.run_b.status) +
+          row("Progress", dif.completed_a + "/9 (" + (d.progress_a ? d.progress_a.percentage : "—") + "%)", dif.completed_b + "/9 (" + (d.progress_b ? d.progress_b.percentage : "—") + "%)") +
+          row("Iterations", (d.iterations_a || []).join(", "), (d.iterations_b || []).join(", ")) +
+          row("Hypotheses", d.hypothesis_count_a, d.hypothesis_count_b) +
+          row("Consensus", dif.consensus_a, dif.consensus_b) +
+          "</tbody></table><p class='muted small'>Raw responses compared via /diff — full exports carry verbatim responses.</p>";
+      }).catch(function (err) { box.innerHTML = "<p class='muted'>Compare failed: " + esc(err.message) + "</p>"; });
     });
 
     /** ---------- finch form ---------- */

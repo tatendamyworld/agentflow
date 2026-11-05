@@ -206,3 +206,14 @@ Multiple research iterations with full preservation:
 - **Snapshots:** `GET /iterations` lists per-iteration completed count, consensus, top/count; `POST /loop` returns inheritance payload + supervisor prompt.
 
 Tests: `tests/test_iterations.py` (5 tests). Full suite (`pytest tests/`): 99 passed.
+
+## PHASE 12 — Research History and Export
+
+Complete mission history with full-fidelity Markdown (no truncation/fabrication):
+
+- **All saved missions:** `GET /runs` list with derived progress; history panel shows Unfinished/Completed + Resume/Inspect (opens via existing switch; iterations via top-nav selector).
+- **Research dossier:** `GET /runs/:id/research-history` (run, progress, per-iteration executions/hypotheses/finch/winner).
+- **Compare missions:** `GET /diff/:other` (progress, iterations, hypothesis counts) + iterations compare still available.
+- **Export:** `GET /export.md` + `agentflow export` now share `agentflow/export.py::build_markdown` — mission details, per-iteration agent prompts + raw responses (backtick-safe fences), hypotheses (all fields), rankings (leaderboard/matches/events), Finch raw evaluations + history, consensus per iteration, iteration history/unresolved, workspace sections, archived executions. Raw responses never omitted.
+
+Tests: `tests/test_history_export.py` (5 tests). Full suite (`pytest tests/`): 104 passed.

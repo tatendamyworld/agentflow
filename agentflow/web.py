@@ -313,39 +313,17 @@ def create_app(project="."):
         return ranked
 
     def export_markdown(run):
-        meta = backend_models.get_run_meta(project, run["id"]) or {}
-        lines = [f"# AgentFlow Run {run['id']}"]
-        if meta.get("name"):
-            lines.append(f"Name: {meta['name']}")
-        lines += [f"Goal: {run['goal']}", f"Status: {run['status']}",
-                  f"Iteration: {run['current_iteration']}", ""]
-        if meta.get("description"):
-            lines += [meta["description"], ""]
-        for e in db.get_executions(run["id"], project=project):
-            lines += [f"## Iteration {e['iteration']} — {e['agent']}",
-                      f"Status: {e['status']}", "### Prompt", "```",
-                      e["prompt"] or "(none)", "```", "### Output", "```",
-                      e["output"] or "(none)", "```", ""]
-            if e.get("top_hypothesis"):
-                lines += [f"Top hypothesis: {e['top_hypothesis']}", ""]
-        lines += ["## Finch (individual)", ""]
-        for f in db.get_finch_runs(run["id"], project=project):
-            lines += [f"### Run {f['run_index']}",
-                      f"Vote: {f['parsed_vote']}", "```", f["raw_response"] or "",
-                      "```"]
-        cons = consensus_for(run)
-        if cons:
-            lines += ["## Consensus", f"Outcome: {cons['outcome']}",
-                      f"YES:{cons['yes']} NO:{cons['no']} "
-                      f"INCONCLUSIVE:{cons['inconclusive']} "
-                      f"INVALID:{cons['invalid']}"]
-        hyps = backend_models.list_hypotheses(project, run["id"])
-        if hyps:
-            lines += ["## Hypotheses", ""]
-            for h in hyps:
-                lines.append(f"- {h.get('title') or ''}: "
-                             f"{h.get('description') or ''}")
-        return "\n".join(lines) + "\n"
+        """Phase 12: complete Markdown (shared builder, raw preserved)."""
+        try:
+            from agentflow.export import build_markdown as _build_markdown
+            return _build_markdown(project, run["id"])
+        except Exception:
+            meta = backend_models.get_run_meta(project, run["id"]) or {}
+            lines = [f"# AgentFlow Run {run['id']}"]
+            lines += [f"Goal: {run['goal']}", f"Status: {run['status']}"]
+            for e in db.get_executions(run["id"], project=project):
+                lines += [f"## Iteration {e['iteration']} — {e['agent']}", e["output"] or "(none)"]
+            return "\n".join(lines) + "\n"
 
     @app.errorhandler(404)
     def _not_found(exc):
@@ -1699,6 +1677,27 @@ def create_app(project="."):
                        unresolved=cmp_payload["unresolved"],
                        comparison=cmp_payload)
 
+    @app.route("/api/runs/<run_id>/research-history", methods=["GET"])
+    def research_history(run_id):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        its = backend_models.list_iterations(project, run_id)
+        iterations = []
+        for it in its:
+            s = backend_models.iteration_summary(project, run_id, it)
+            exes = db.get_executions(run_id, iteration=it, project=project)
+            iterations.append({"iteration": it, "summary": s, "executions": exes,
+                                "hypotheses": [hypothesis_payload(h) for h in backend_models.list_hypotheses(project, run_id, iteration=it)],
+                                "finch": db.get_finch_runs(run_id, iteration=it, project=project),
+                                "winner": s.get("top_hypothesis")})
+        payload = run_payload(run)
+        prog = _wf.compute_progress(run, current_exes(run)) if _wf is not None else {}
+        return jsonify(run_id=run_id, run=payload, progress=prog, iterations=iterations,
+                       iterations_list=its,
+                       export_url=f"/api/runs/{run_id}/export.md",
+                       completed_all=len(its) >= 1)
+
     @app.route("/api/runs/<run_id>/diff/<other_id>", methods=["GET"])
     def diff(run_id, other_id):
         run_a, failure = get_run_or_404(run_id)
@@ -1721,9 +1720,19 @@ def create_app(project="."):
             })
         cons_a, cons_b = consensus_for(run_a), consensus_for(run_b)
         payload_a, payload_b = run_payload(run_a), run_payload(run_b)
+        try:
+            prog_a = db.progress_for(run_a["id"], project); prog_b = db.progress_for(run_b["id"], project)
+        except Exception:
+            prog_a = prog_b = {}
+        hyps_a = backend_models.list_hypotheses(project, run_a["id"])
+        hyps_b = backend_models.list_hypotheses(project, run_b["id"])
         return jsonify({
             "run_a": payload_a, "run_b": payload_b, "a": payload_a,
             "b": payload_b,
+            "progress_a": prog_a, "progress_b": prog_b,
+            "hypothesis_count_a": len(hyps_a), "hypothesis_count_b": len(hyps_b),
+            "iterations_a": backend_models.list_iterations(project, run_a["id"]),
+            "iterations_b": backend_models.list_iterations(project, run_b["id"]),
             "differences": {
                 "goal_same": run_a["goal"] == run_b["goal"],
                 "status_a": run_a["status"], "status_b": run_b["status"],

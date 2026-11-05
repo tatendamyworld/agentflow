@@ -165,20 +165,13 @@ def resume(run_id):
 @click.option("--run", "run_id", default=None)
 @click.option("--format", "fmt", default="md", show_default=True)
 def export(run_id, fmt):
-    """Export run to Markdown."""
+    """Export run to Markdown (complete research history, raw preserved)."""
     run = _run_or_fail(run_id or _current_run_id(None))
-    all_exes = db.get_executions(run["id"], project=PROJECT)
-    finch = db.get_finch_runs(run["id"], project=PROJECT)
-    cons = db.get_consensus(run["id"], project=PROJECT)
-    lines = [f"# AgentFlow Run {run['id']}", f"Goal: {run['goal']}", f"Status: {run['status']} Iteration: {run['current_iteration']}", ""]
-    for e in all_exes:
-        lines += [f"## Iteration {e['iteration']} — {e['agent']}", f"Status: {e['status']}", f"### Prompt", "```", e["prompt"] or "(none)", "```", f"### Output", "```", e["output"] or "(none)", "```", ""]
-    lines += ["## Finch (individual)", ""]
-    for f in finch:
-        lines += [f"### Run {f['run_index']}", f"Vote: {f['parsed_vote']}", "```", f["raw_response"], "```"]
-    if cons:
-        lines += ["## Consensus", f"Outcome: {cons['outcome']}", f"YES:{cons['yes_count']} NO:{cons['no_count']} INCONCLUSIVE:{cons['inconclusive_count']} INVALID:{cons['invalid_count']}", cons["detail"] or ""]
-    out = "\n".join(lines)
+    try:
+        from agentflow.export import build_markdown
+        out = build_markdown(PROJECT, run["id"])
+    except Exception as exc:
+        console.print(f"[red]Export failed: {exc}[/red]"); raise SystemExit(1)
     if fmt == "md":
         path = os.path.join(PROJECT, ".agentflow", f"export-{run['id']}.md")
         os.makedirs(os.path.dirname(path), exist_ok=True)

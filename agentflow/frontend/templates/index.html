@@ -270,12 +270,13 @@
       <ol id="timeline-list" class="timeline"><li class="muted">No events yet.</li></ol>
     </section>
 
-    <!-- History -->
+    <!-- History — PHASE 12 Research History -->
     <section id="history" class="panel" aria-labelledby="hist-title">
       <div class="panel-head">
-        <h2 id="hist-title">History</h2>
+        <h2 id="hist-title">Research History — all missions</h2>
         <div class="panel-actions">
-          <label class="small muted">Compare:
+          <a id="export-selected" class="btn btn-ghost btn-small" href="#">Export Markdown</a>
+          <label class="small muted">Compare missions:
             <select id="compare-a" aria-label="Compare run A"></select>
             <select id="compare-b" aria-label="Compare run B"></select>
           </label>
@@ -284,7 +285,8 @@
           <span id="archive-msg" class="muted small" role="status"></span>
         </div>
       </div>
-      <div id="history-list" class="history-list"><p class="muted">No history loaded.</p></div>
+      <div id="history-list" class="history-list"><p class="muted">No missions yet.</p></div>
+      <div id="history-detail" class="history-compare" hidden aria-live="polite"></div>
       <h3 class="insp-h">Compare iterations</h3>
       <div class="panel-actions">
         <label class="small muted">A <select id="iter-a" aria-label="Compare iteration A"></select></label>
