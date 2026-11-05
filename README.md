@@ -233,3 +233,19 @@ Sync guarantees:
 - `status/resume/diff` sync derived run status via `db.sync_run_status`/`progress_for` (same values as dashboard).
 
 Tests: `tests/test_cli.py` (5 tests, CLI↔web round-trip). Full suite (`pytest tests/`): 109 passed.
+
+## PHASE 14 — UI Polish (control room)
+
+Calm, professional refinements (no excessive glow, reduced-motion respected):
+
+- **Navigation:** smooth `scroll-behavior` + click-to-focus, scrollspy active link (`IntersectionObserver`), status pulse only via progress transition.
+- **Agent selection:** SVG hover ring + keyboard `1–9` (`af:select-agent` bridge) + inspector highlight.
+- **Expandable panels:** `data-expand` toggles (`output-pre.is-expanded`) for prompt/saved/Crow/Falcon raw outputs.
+- **Empty states:** hypothesis/mission CTA buttons, contextual hints.
+- **Loading:** global `loading-bar` + `withBusy` button states + `<span class=spinner>`; toast errors (`toast-wrap`, auto-dismiss, click-to-close).
+- **Confirms:** destructive Retry/Archive/Next-iteration guard with `confirm()` dialogs.
+- **Responsive:** 980px/720px breakpoints (stacked layout, horizontal scroll tables/network).
+- **Search/filter:** hypotheses search + status filter, missions search + Unfinished/Completed/Archived bucket (`filterHyp`/`filterHistory`, `applyFilters` after each render).
+- **Keyboard:** `1–9` agents, `/` search, `go/gn/gh/gf` jumps, `?` help, `Esc` close (`help-dialog`).
+
+Tests: `tests/test_ui_polish.py` (11 tests). Full suite (`pytest tests/`): 120 passed.

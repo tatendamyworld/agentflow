@@ -47,9 +47,12 @@
       <a href="#history" data-nav>History</a>
     </nav>
 
+    <button type="button" id="help-btn" class="btn btn-ghost btn-small" title="Keyboard shortcuts (?)">Keyboard</button>
     <button type="button" id="new-mission-btn" class="btn btn-primary">+ New Mission</button>
   </div>
 </header>
+<div id="toast-wrap" aria-live="polite" aria-atomic="true"></div>
+<div id="loading-bar" class="loading-bar" hidden><span class="spinner" aria-hidden="true"></span><span id="loading-text">Working…</span></div>
 
 <div id="api-error" class="api-error" role="alert" hidden>
   <strong>Backend unavailable.</strong> <span id="api-error-msg"></span>
@@ -155,6 +158,13 @@
           <select id="hyp-winner"><option value="">— no winner yet —</option><option value="a">A wins</option><option value="b">B wins</option></select></label>
         <button type="button" id="hyp-compare-go" class="btn btn-primary btn-small">Compare A vs B</button>
       </div>
+      <div class="search-row">
+        <label for="hyp-search">Search hypotheses
+          <input type="search" id="hyp-search" placeholder="Filter by title, source, status… ( / )" autocomplete="off"></label>
+        <label for="hyp-status-filter">Status
+          <select id="hyp-status-filter"><option value="">All</option><option>ACTIVE</option><option>SELECTED</option><option>ARCHIVED</option></select></label>
+        <span id="hyp-visible" class="muted small"></span>
+      </div>
       <p id="hyp-empty" class="muted">No hypotheses yet. Import from outputs or create one manually. If parsing fails, manual entry is required — no research findings are fabricated.</p>
       <div id="hyp-cards" class="hyp-cards"></div>
       <div id="hyp-compare" class="hyp-compare" hidden aria-live="polite"></div>
@@ -213,7 +223,7 @@
         </div>
         <h3 class="insp-h">Generated prompt</h3>
         <pre id="crow-prompt" class="output-pre">—</pre>
-        <h3 class="insp-h">Saved response (raw)</h3>
+        <h3 class="insp-h">Saved response (raw) <button type="button" class="btn btn-ghost btn-small" data-expand="crow-output">Expand</button></h3>
         <pre id="crow-output" class="output-pre">—</pre>
         <h3 class="insp-h">Investigation sections</h3>
         <div class="ws-sections" id="crow-sections"></div>
@@ -232,7 +242,7 @@
         </div>
         <h3 class="insp-h">Generated prompt</h3>
         <pre id="falcon-prompt" class="output-pre">—</pre>
-        <h3 class="insp-h">Saved response (raw)</h3>
+        <h3 class="insp-h">Saved response (raw) <button type="button" class="btn btn-ghost btn-small" data-expand="falcon-output">Expand</button></h3>
         <pre id="falcon-output" class="output-pre">—</pre>
         <h3 class="insp-h">Investigation sections</h3>
         <div class="ws-sections" id="falcon-sections"></div>
@@ -285,7 +295,13 @@
           <span id="archive-msg" class="muted small" role="status"></span>
         </div>
       </div>
-      <div id="history-list" class="history-list"><p class="muted">No missions yet.</p></div>
+      <div class="search-row">
+        <label for="history-search">Search missions
+          <input type="search" id="history-search" placeholder="Filter by goal or ID…" autocomplete="off"></label>
+        <label for="history-bucket">Show
+          <select id="history-bucket"><option value="">All</option><option value="unfinished">Unfinished</option><option value="completed">Completed</option><option value="archived">Archived</option></select></label>
+      </div>
+      <div id="history-list" class="history-list"><p class="muted">No missions yet.<br><button type="button" class="btn btn-ghost btn-small" id="history-empty-new">+ Create mission</button></p></div>
       <div id="history-detail" class="history-compare" hidden aria-live="polite"></div>
       <h3 class="insp-h">Compare iterations</h3>
       <div class="panel-actions">
@@ -327,8 +343,8 @@
       <ul id="insp-deps" class="insp-deps muted small"><li>Select an agent.</li></ul>
     </div>
 
-    <div class="insp-section">
-      <h3 class="insp-h">Generated prompt (preview)</h3>
+    <div class="insp-section expandable">
+      <h3 class="insp-h">Generated prompt (preview) <button type="button" class="btn btn-ghost btn-small" data-expand="insp-prompt">Expand</button></h3>
       <div id="insp-warning" class="insp-warning" hidden role="alert"></div>
       <pre id="insp-prompt" class="output-pre">—</pre>
     </div>
@@ -338,8 +354,8 @@
       <textarea id="insp-output" rows="8" placeholder="Paste the agent's response here…"></textarea>
     </div>
 
-    <div class="insp-section">
-      <h3 class="insp-h">Saved output</h3>
+    <div class="insp-section expandable">
+      <h3 class="insp-h">Saved output <button type="button" class="btn btn-ghost btn-small" data-expand="insp-saved">Expand</button></h3>
       <pre id="insp-saved" class="output-pre">—</pre>
     </div>
 
@@ -388,6 +404,18 @@
   </form>
 </dialog>
 
+<dialog id="help-dialog" aria-labelledby="help-title">
+  <h2 id="help-title">Keyboard shortcuts</h2>
+  <table class="table"><tbody>
+    <tr><th>1–9</th><td>Select agent (Supervisor → Finch)</td></tr>
+    <tr><th>/</th><td>Focus hypothesis search</td></tr>
+    <tr><th>go / gn / gh / gf</th><td>Jump to Overview / Network / Hypotheses / Finch</td></tr>
+    <tr><th>?</th><td>This help</td></tr>
+    <tr><th>Esc</th><td>Close dialogs</td></tr>
+  </tbody></table>
+  <div class="btn-row"><button type="button" class="btn btn-primary" id="help-close">Close</button></div>
+</dialog>
+<script src="../static/js/ui.js"></script>
 <script src="../static/js/graph.js"></script>
 <script src="../static/js/agents.js"></script>
 <script src="../static/js/dashboard.js"></script>

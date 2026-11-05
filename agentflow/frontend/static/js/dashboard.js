@@ -649,6 +649,7 @@
     }
     var arcBtn = $("archive-btn");
     if (arcBtn) arcBtn.addEventListener("click", function () {
+      if (!window.confirm("Archive this mission? Archived runs are terminal and cannot be reopened for editing.")) return;
       var msgEl = $("archive-msg");
       if (!ctx.state.runId) { if (msgEl) msgEl.textContent = "No mission selected."; return; }
       if (msgEl) msgEl.textContent = "Archiving…";
@@ -716,6 +717,7 @@
     var loopBtn = $("loop-btn");
     if (loopBtn) loopBtn.addEventListener("click", function () {
       if (!ctx.state.runId) return;
+      if (!window.confirm("Start the next research iteration? Previous results are preserved; only the new iteration's agent statuses reset.")) return;
       ctx.api.loop(ctx.state.runId).then(function (d) {
         var sup = d.supervisor_prompt || "";
         ctx.state.selectedAgent = "supervisor";

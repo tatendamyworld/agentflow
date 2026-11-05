@@ -204,11 +204,17 @@
 
   /* ---------- render ---------- */
   function render() {
+    /* keyboard agent selection bridge (keys 1-9) */
+    try {
+      var bridged = window.__afSelectedAgent;
+      if (bridged && bridged !== state.selectedAgent) { state.selectedAgent = bridged; window.__afSelectedAgent = null; }
+    } catch (e) {}
     window.AgentFlow.graph.render($("agent-network"), state.executions, state.selectedAgent, function (id) {
       state.selectedAgent = id; render();
     });
     ctx.renderInspector && ctx.renderInspector();
     ctx.renderDashboard && ctx.renderDashboard();
+    if (window.AgentFlow.applyFilters) window.AgentFlow.applyFilters();
   }
 
   var ctx = {

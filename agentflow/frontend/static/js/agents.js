@@ -43,6 +43,16 @@
   };
 
   function init(ctx) {
+    document.addEventListener("af:select-agent", function (ev) {
+      var id = ev.detail; if (!id) return;
+      ctx.state.selectedAgent = id;
+      if (ctx.refresh) return;
+      var exe = (ctx.state.executions || []).filter(function (e) { return e.agent === id; })[0] || {};
+      /* graph re-render + inspector sync happens on next dashboard render via bridge */
+      try { window.AgentFlow && ctx.renderInspector && ctx.renderInspector(); } catch (e) {}
+      /* trigger graph highlight by dispatching click on node if present */
+      var node = document.querySelector('[data-agent="' + id + '"]'); if (node) node.click();
+    });
     var generateBtn = $("insp-generate"), copyBtn = $("insp-copy"), submitBtn = $("insp-submit"),
         saveBtn = $("insp-save"), historyBtn = $("insp-history"), retryBtn = $("insp-retry"),
         pasteBtn = $("insp-paste"), out = $("insp-output");
@@ -201,6 +211,7 @@
     /* RETRY STEP — reset slot and regenerate prompt via /retry */
     if (retryBtn) retryBtn.addEventListener("click", function () {
       if (!needRun() || !ctx.state.selectedAgent) return;
+      if (!window.confirm("Retry this step? Its previous output is archived, not deleted, and downstream steps reset.")) return;
       msg("Retrying (reset + regenerate) " + ctx.state.selectedAgent + "…");
       ctx.api.retry(ctx.state.runId, ctx.state.selectedAgent).then(function (data) {
         var prompt = data.prompt || "";
