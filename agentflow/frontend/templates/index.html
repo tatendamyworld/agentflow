@@ -111,16 +111,47 @@
       </ul>
     </section>
 
-    <!-- Hypotheses -->
+    <!-- Hypotheses — PHASE 7 Hypothesis Laboratory -->
     <section id="hypotheses" class="panel" aria-labelledby="hyp-title">
       <div class="panel-head">
-        <h2 id="hyp-title">Hypotheses</h2>
+        <h2 id="hyp-title">Hypothesis Laboratory</h2>
         <div class="panel-actions">
+          <button type="button" id="hyp-import-btn" class="btn btn-ghost btn-small" title="Import H#/E# lines from Generation/Evolution/Ranking outputs">Import from outputs</button>
+          <button type="button" id="hyp-new-toggle" class="btn btn-ghost btn-small" aria-expanded="false">+ Manual hypothesis</button>
           <button type="button" id="hyp-compare-btn" class="btn btn-ghost btn-small">Compare selected</button>
           <span id="hyp-count" class="muted small"></span>
         </div>
       </div>
-      <p id="hyp-empty" class="muted">No hypotheses yet. Run Generation / Ranking, or the backend may not expose them.</p>
+      <p id="hyp-msg" class="muted small" role="status" aria-live="polite"></p>
+      <details id="hyp-new-wrap" class="hyp-new" hidden>
+        <summary>Manual hypothesis entry (used when parsing fails or for hand-crafted ideas)</summary>
+        <form id="hyp-new-form" class="hyp-form">
+          <div class="hyp-form-grid">
+            <label>Title<input type="text" id="nh-title" required placeholder="H11. Short claim"></label>
+            <label>Source agent
+              <select id="nh-source">
+                <option value="manual">manual</option><option>generation</option><option>evolution</option><option>reflection</option><option>ranking</option><option>proximity</option><option>supervisor</option><option>crow</option><option>falcon</option>
+              </select></label>
+            <label>Survivability (0–10)<input type="number" id="nh-surv" step="0.1" min="0" max="10" placeholder="—"></label>
+            <label>ELO rating (0–4000)<input type="number" id="nh-elo" step="1" min="0" max="4000" placeholder="—"></label>
+            <label>Iteration<input type="number" id="nh-iter" min="1" step="1" placeholder="current"></label>
+            <label>Status<select id="nh-status"><option>ACTIVE</option><option>SELECTED</option><option>ARCHIVED</option></select></label>
+          </div>
+          <label>Description<textarea id="nh-desc" rows="2" placeholder="Full description"></textarea></label>
+          <label>Supporting evidence<textarea id="nh-evidence" rows="2" placeholder="Evidence / mechanism (leave blank if unknown)"></textarea></label>
+          <label>Weaknesses / risks<textarea id="nh-weak" rows="2" placeholder="Weaknesses"></textarea></label>
+          <div class="btn-row"><button type="submit" class="btn btn-primary btn-small">Create hypothesis</button>
+          <span class="muted small">Unrated / unknown fields stay blank — no scores fabricated.</span></div>
+        </form>
+      </details>
+      <div class="hyp-compare-selects" aria-label="Comparison selectors">
+        <label>Hypothesis A <select id="hyp-a" aria-label="Hypothesis A"></select></label>
+        <label>Hypothesis B <select id="hyp-b" aria-label="Hypothesis B"></select></label>
+        <label>Winner (optional, updates ELO)
+          <select id="hyp-winner"><option value="">— no winner yet —</option><option value="a">A wins</option><option value="b">B wins</option></select></label>
+        <button type="button" id="hyp-compare-go" class="btn btn-primary btn-small">Compare A vs B</button>
+      </div>
+      <p id="hyp-empty" class="muted">No hypotheses yet. Import from outputs or create one manually. If parsing fails, manual entry is required — no research findings are fabricated.</p>
       <div id="hyp-cards" class="hyp-cards"></div>
       <div id="hyp-compare" class="hyp-compare" hidden aria-live="polite"></div>
     </section>

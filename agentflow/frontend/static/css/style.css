@@ -193,3 +193,16 @@ dialog label{display:block;margin:.5rem 0 .25rem;color:var(--muted);font-size:.8
 .insp-warning ul{margin:.35rem 0 0;padding-left:1.1rem}
 .insp-history{margin-top:.9rem}
 .insp-history .timeline li pre{margin-top:.35rem}
+
+/* PHASE 7 — Hypothesis Laboratory */
+.hyp-new{margin:0 0 .8rem;background:#0b1526;border:1px solid var(--border);border-radius:var(--radius-sm);padding:.7rem}
+.hyp-form-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:.6rem;margin:.6rem 0}
+.hyp-form label{display:flex;flex-direction:column;gap:.25rem;font-size:.8rem;color:var(--muted)}
+.hyp-form input,.hyp-form select,.hyp-form textarea{background:#0a1220;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:.45rem;font-size:.85rem;width:100%}
+.hyp-compare-selects{display:flex;gap:.6rem;flex-wrap:wrap;align-items:end;margin:.6rem 0 .9rem}
+.hyp-compare-selects label{font-size:.8rem;color:var(--muted);display:flex;flex-direction:column;gap:.25rem}
+.hyp-compare table{width:100%;border-collapse:collapse}
+.hyp-compare th,.hyp-compare td{border:1px solid var(--border);padding:.4rem;text-align:left;vertical-align:top;font-size:.82rem}
+.hyp-card.is-archived{opacity:.6;border-style:dashed}
+.badge-archived{color:var(--faint);border-color:var(--border)}
+.badge-active{color:var(--ready);border-color:#0369a1}

@@ -182,6 +182,14 @@ def create_app(project="."):
         for e in exes:
             if e.get("top_hypothesis"):
                 return e["top_hypothesis"]
+        # Phase 7: SELECTED hypothesis in SQLite wins over ranking regex
+        try:
+            for h in backend_models.list_hypotheses(project, run["id"], iteration=run["current_iteration"]):
+                hp = hypothesis_payload(h)
+                if hp.get("status") == "SELECTED" and (hp.get("title") or hp.get("description")):
+                    return hp.get("title") or hp.get("description")
+        except Exception:
+            pass
         ranking = next((e for e in exes if e["agent"] == "ranking"), None)
         if ranking and ranking.get("output"):
             m = re.search(r"Top hypothesis:\s*(.+)", ranking["output"], re.I)
@@ -238,15 +246,31 @@ def create_app(project="."):
     def hypothesis_payload(h):
         out = dict(h)
         text = out.get("description") or out.get("title") or ""
+        status = out.get("status") or ("SELECTED" if out.get("is_survivor") else "ACTIVE")
+        out["status"] = status
+        out["selection"] = status
+        out["selected"] = status == "SELECTED"
+        out["archived"] = status == "ARCHIVED"
         out["text"] = text
         out["hypothesis"] = text
+        out["hypothesis_id"] = out.get("id")
         out["agent"] = out.get("origin_agent")
         out["source"] = out.get("origin_agent")
+        out["source_agent"] = out.get("origin_agent")
+        out["origin_agent"] = out.get("origin_agent")
+        ev = out.get("evidence") or out.get("strengths") or ""
+        out["evidence"] = ev
+        out["supporting_evidence"] = ev
+        out["strengths"] = out.get("strengths") or ev
+        out["weaknesses"] = out.get("weaknesses") or ""
+        out["survivability_score"] = out.get("survivability")
+        out["elo_rating"] = out.get("elo_rating")
+        out["elo"] = out.get("elo_rating")
         out["rank"] = out.get("ranking")
         out["survivor"] = bool(out.get("is_survivor"))
-        out["top"] = bool(out.get("is_survivor"))
-        out["is_top"] = bool(out.get("is_survivor"))
-        # label like "H3" from a parsed title prefix, when present
+        out["top"] = bool(out.get("is_survivor")) if status != "ARCHIVED" else False
+        out["is_top"] = bool(out.get("is_survivor")) if status != "ARCHIVED" else False
+        out["is_survivor"] = bool(out.get("is_survivor")) and status != "ARCHIVED"
         m = re.match(r"^\s*(H\d+|E\d+)\b", out.get("title") or "", re.I)
         out["label"] = m.group(1).upper() if m else None
         return out
@@ -261,7 +285,7 @@ def create_app(project="."):
         return [hypothesis_payload(h) for h in rows]
 
     def ranked_payload(run):
-        items = hypotheses_for(run)
+        items = [h for h in hypotheses_for(run) if h.get("status") != "ARCHIVED"]
         items = sorted(items, key=lambda h: (
             h.get("ranking") is None, h.get("ranking") or 0))
         ranked = []
@@ -269,7 +293,9 @@ def create_app(project="."):
             row = dict(h)
             row["rank"] = h.get("ranking") or i
             row["ranking"] = row["rank"]
-            row["status"] = "TOP" if h.get("is_survivor") else ""
+            row["status"] = h.get("status") or ("SELECTED" if h.get("is_survivor") else "ACTIVE")
+            if row["status"] == "SELECTED":
+                row["status"] = "TOP"
             ranked.append(row)
         return ranked
 
@@ -956,23 +982,50 @@ def create_app(project="."):
     def _validate_hypothesis_fields(data, partial=False):
         """Returns (fields, error).  Unknown keys are ignored."""
         fields = {}
-        for key in ("title", "description", "strengths", "weaknesses", "notes"):
-            if key in data:
-                val, problem = valid_str(data[key], key, required=False)
+        # evidence aliases
+        if "supporting_evidence" in data and "evidence" not in data:
+            data = dict(data); data["evidence"] = data["supporting_evidence"]
+        if "source_agent" in data and "origin_agent" not in data:
+            data = dict(data); data["origin_agent"] = data["source_agent"]
+        if "survivability_score" in data and "survivability" not in data:
+            data = dict(data); data["survivability"] = data["survivability_score"]
+        for key in ("title", "description", "evidence", "strengths", "weaknesses", "notes"):
+            if key in data and data[key] is not None:
+                val, problem = valid_str(data[key], key, required=False, max_len=50000)
                 if problem:
                     return None, problem
                 fields[key] = val
         if "origin_agent" in data and data["origin_agent"] is not None:
-            agent, problem = valid_agent(data["origin_agent"])
-            if problem:
-                return None, "origin_agent must be a known agent"
-            fields["origin_agent"] = agent
+            v = data["origin_agent"]
+            if v == "manual":
+                fields["origin_agent"] = "manual"
+            else:
+                agent, problem = valid_agent(v)
+                if problem:
+                    return None, "origin_agent must be a known agent or manual"
+                fields["origin_agent"] = agent
         for key in ("score", "survivability"):
             if key in data and data[key] is not None:
                 val = data[key]
                 if isinstance(val, bool) or not isinstance(val, (int, float)):
                     return None, f"{key} must be a number"
-                fields[key] = float(val)
+                fval = float(val)
+                if key == "survivability" and not (0 <= fval <= 10):
+                    return None, "survivability must be 0-10 (no multi-agent scores fabricated)"
+                fields[key] = fval
+        elo_raw = data.get("elo_rating", data.get("elo"))
+        if elo_raw is not None:
+            if isinstance(elo_raw, bool) or not isinstance(elo_raw, (int, float)):
+                return None, "elo_rating must be a number"
+            fval = float(elo_raw)
+            if not (0 <= fval <= 4000):
+                return None, "elo_rating must be 0-4000"
+            fields["elo_rating"] = fval
+        if "status" in data and data["status"] is not None:
+            st = str(data["status"]).strip().upper()
+            if st not in backend_models.HYPOTHESIS_STATUSES:
+                return None, f"status must be one of {backend_models.HYPOTHESIS_STATUSES}"
+            fields["status"] = st
         if "ranking" in data and data["ranking"] is not None:
             val = data["ranking"]
             if isinstance(val, bool) or not isinstance(val, int):
@@ -1007,6 +1060,11 @@ def create_app(project="."):
         if not fields.get("title"):
             fields["title"] = fields.get("description", "")
         created = backend_models.create_hypothesis(project, run_id, **fields)
+        if (fields.get("status") or ("SELECTED" if fields.get("is_survivor") else "ACTIVE")) == "SELECTED":
+            try:
+                created, _top = backend_models.select_hypothesis(project, run_id, created["id"])
+            except ValueError as exc:
+                return err(str(exc), 409)
         return jsonify({**hypothesis_payload(created),
                         "hypothesis": hypothesis_payload(created)}), 201
 
@@ -1022,6 +1080,20 @@ def create_app(project="."):
             return err(problem)
         if not fields:
             return err("no editable fields provided")
+        want_selected = (fields.get("status") == "SELECTED") or (fields.get("is_survivor") is True)
+        archived_cur = (existing.get("status") or ("SELECTED" if existing.get("is_survivor") else "ACTIVE")) == "ARCHIVED"
+        if want_selected and archived_cur:
+            return err("archived hypotheses cannot be selected — restore first", 409)
+        if want_selected:
+            base = {k: v for k, v in fields.items() if k not in ("status", "is_survivor")}
+            if base:
+                backend_models.update_hypothesis(project, hyp_id, base)
+            try:
+                updated, _top = backend_models.select_hypothesis(project, run_id, hyp_id)
+            except ValueError as exc:
+                return err(str(exc), 409)
+            payload = hypothesis_payload(updated)
+            return jsonify({**payload, "hypothesis": payload})
         updated = backend_models.update_hypothesis(project, hyp_id, fields)
         payload = hypothesis_payload(updated)
         return jsonify({**payload, "hypothesis": payload})
@@ -1053,6 +1125,132 @@ def create_app(project="."):
         if existing is None or existing["run_id"] != run_id:
             return err(f"hypothesis {hyp_id} not found in run {run_id}", 404)
         payload = hypothesis_payload(existing)
+        return jsonify({**payload, "hypothesis": payload})
+
+    @app.route("/api/runs/<run_id>/hypotheses/import", methods=["POST"])
+    def import_hypotheses(run_id):
+        """Import from agent outputs; parse failure -> manual-entry guidance."""
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        data = body()
+        if data is None:
+            return err("request body must be a JSON object")
+        exes = db.get_executions(run_id, iteration=run["current_iteration"], project=project)
+        requested = data.get("agent") or data.get("agent_id")
+        it = data.get("iteration", run["current_iteration"])
+        if isinstance(it, bool) or not isinstance(it, int) or it < 1:
+            return err("iteration must be a positive integer")
+        if requested:
+            if requested not in AGENT_IDS:
+                return err(f"unknown agent {requested}", 404)
+            row = next((e for e in exes if e["agent"] == requested), None)
+            if not row or row.get("status") != "COMPLETED" or not row.get("output"):
+                return jsonify(imported=0, parse_ok=False, found=0, per_agent=[],
+                               message=f"No completed output for {requested} — save that agent's response first, or enter hypotheses manually (no data fabricated).")
+            report = backend_models.import_from_agent_output(project, run_id, it, requested, row["output"])
+            return jsonify(run_id=run_id, agent=requested, **report)
+        report = backend_models.import_hypotheses_from_outputs(project, run_id, it, exes)
+        return jsonify(run_id=run_id, **report)
+
+    @app.route("/api/runs/<run_id>/hypotheses/compare", methods=["GET", "POST"])
+    def compare_hypotheses(run_id):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        b = body() if request.method == "POST" else {}
+        q = dict(request.args)
+        src = (b or {}).copy()
+        for k in ("a", "b"):
+            if k not in src and q.get(k) is not None:
+                src[k] = q.get(k)
+        def _int(v):
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return None
+        a_id, b_id = _int(src.get("a", src.get("a_id"))), _int(src.get("b", src.get("b_id")))
+        if a_id is None or b_id is None:
+            return err("provide both a and b hypothesis IDs (?a=1&b=2 or {a,b})")
+        ha = backend_models.get_hypothesis(project, a_id)
+        hb = backend_models.get_hypothesis(project, b_id)
+        if ha is None or ha["run_id"] != run_id or hb is None or hb["run_id"] != run_id:
+            return err(f"hypothesis not found in run {run_id}", 404)
+        winner = (b or {}).get("winner", (b or {}).get("winner_id"))
+        pa, pb = hypothesis_payload(ha), hypothesis_payload(hb)
+        cmp_payload = backend_models.compare_hypotheses(pa, pb)
+        updated = {}
+        if winner is not None:
+            wid = _int(winner)
+            if wid not in (a_id, b_id):
+                return err("winner must be a or b")
+            lid = b_id if wid == a_id else a_id
+            try:
+                w, l = backend_models.record_compare_win(project, wid, lid)
+            except ValueError as exc:
+                return err(str(exc), 404)
+            cmp_payload = backend_models.compare_hypotheses(hypothesis_payload(w), hypothesis_payload(l))
+            cmp_payload["verdict"] = {"winner": wid, "loser": lid, "note": "ELO updated by K=32 for explicit pairwise win (no auto-tournament)"}
+            updated = {"winner": hypothesis_payload(w), "loser": hypothesis_payload(l)}
+        return jsonify(run_id=run_id, a=cmp_payload["a"], b=cmp_payload["b"], deltas=cmp_payload["deltas"],
+                       verdict=cmp_payload["verdict"], comparison=cmp_payload, **updated)
+
+    @app.route("/api/runs/<run_id>/hypotheses/<int:hyp_id>/select", methods=["POST"])
+    def select_hypothesis_item(run_id, hyp_id):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        try:
+            updated, top_text = backend_models.select_hypothesis(project, run_id, hyp_id)
+        except ValueError as exc:
+            return err(str(exc), 409)
+        payload = hypothesis_payload(updated)
+        return jsonify({**payload, "hypothesis": payload,
+                        "top_hypothesis": top_text, "run_id": run_id,
+                        "crow_available": bool(top_text),
+                        "note": "TOP_HYPOTHESIS saved to SQLite — Crow prompt will embed it."})
+
+    @app.route("/api/runs/<run_id>/hypotheses/<int:hyp_id>/archive", methods=["POST"])
+    def archive_hypothesis_item(run_id, hyp_id):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        existing = backend_models.get_hypothesis(project, hyp_id)
+        if existing is None or existing["run_id"] != run_id:
+            return err(f"hypothesis {hyp_id} not found in run {run_id}", 404)
+        if (existing.get("status") or ("SELECTED" if existing.get("is_survivor") else "ACTIVE")) == "ARCHIVED":
+            return err("hypothesis already archived", 409)
+        was_selected = (existing.get("status") or ("SELECTED" if existing.get("is_survivor") else "ACTIVE")) == "SELECTED"
+        updated = backend_models.archive_hypothesis(project, hyp_id)
+        payload = hypothesis_payload(updated)
+        # If archived top, clear Crow top hint so Crow does not embed stale winner
+        if was_selected:
+            try:
+                ranking = db.get_execution(run_id, "ranking", project=project)
+                if ranking and ranking.get("top_hypothesis"):
+                    # only clear if it references this hypothesis title
+                    if (updated.get("title") or "") in (ranking.get("top_hypothesis") or ""):
+                        import sqlite3
+                        con = db._connect(project)
+                        con.execute("UPDATE executions SET top_hypothesis=NULL WHERE run_id=? AND agent='ranking'", (run_id,))
+                        con.commit(); con.close()
+            except Exception:
+                pass
+        return jsonify({**payload, "hypothesis": payload})
+
+    @app.route("/api/runs/<run_id>/hypotheses/<int:hyp_id>/restore", methods=["POST"])
+    def restore_hypothesis_item(run_id, hyp_id):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        existing = backend_models.get_hypothesis(project, hyp_id)
+        if existing is None or existing["run_id"] != run_id:
+            return err(f"hypothesis {hyp_id} not found in run {run_id}", 404)
+        try:
+            updated = backend_models.restore_hypothesis(project, hyp_id)
+        except ValueError as exc:
+            return err(str(exc), 409)
+        payload = hypothesis_payload(updated)
         return jsonify({**payload, "hypothesis": payload})
 
     @app.route("/api/runs/<run_id>/ranking", methods=["GET"])

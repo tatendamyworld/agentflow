@@ -72,96 +72,256 @@
       }).join("");
     }
 
-    /** ---------- hypotheses ---------- */
+    /** ---------- hypotheses — PHASE 7 Hypothesis Laboratory ---------- */
+    function hypMsg(text) { var m = $("hyp-msg"); if (m) m.textContent = text || ""; }
+
+    function mapHyp(h, i) {
+      /* h may be API payload or offline fallback */
+      if (h == null || typeof h !== "object") return null;
+      var raw = h.id != null ? h.id : ("h" + i);
+      return {
+        id: raw,
+        title: h.title || h.text || h.hypothesis || ("Hypothesis " + raw),
+        desc: h.description || h.text || h.hypothesis || "",
+        text: h.text || h.hypothesis || h.description || h.title || "",
+        source: h.source_agent || h.agent || h.source || h.origin_agent || "manual",
+        evidence: h.evidence || h.supporting_evidence || h.strengths || "",
+        strengths: h.strengths || h.evidence || "",
+        weaknesses: h.weaknesses || "",
+        score: h.score,
+        surv: h.survivability != null ? h.survivability : h.survivability_score,
+        elo: h.elo_rating != null ? h.elo_rating : h.elo,
+        status: h.status || h.selection || (h.survivor || h.is_top || h.is_survivor ? "SELECTED" : "ACTIVE"),
+        iteration: h.iteration,
+        ranking: h.ranking != null ? h.ranking : h.rank,
+        survivor: !!(h.survivor || h.is_top || h.is_survivor),
+        top: !!((h.top || h.is_top) && (h.status || "ACTIVE") !== "ARCHIVED") || h.status === "SELECTED",
+        raw: h
+      };
+    }
+
     function collectHypotheses() {
       var nested = ctx.state.hypotheses;
       if (Array.isArray(nested) && nested.length) {
-        return nested.map(function (h, i) {
-          return { id: h.id || ("h" + i), text: h.text || h.hypothesis || h.output || JSON.stringify(h),
-            score: h.score, source: h.agent || h.source || "api", survivor: !!h.survivor, top: !!h.top || !!h.is_top };
-        });
+        var mapped = nested.map(mapHyp).filter(Boolean);
+        return mapped;
       }
       var out = [], exes = ctx.state.executions || [];
       ["generation", "ranking", "evolution", "reflection"].forEach(function (agent) {
         exes.filter(function (e) { return e.agent === agent; }).forEach(function (e) {
           parseHypothesesFromText(e.output).forEach(function (t, i) {
-            out.push({ id: agent + "-" + i, text: t, score: null, source: agent, survivor: false,
-              top: e.top_hypothesis && e.top_hypothesis === t });
+            out.push({ id: agent + "-" + i, title: t, desc: t, text: t, score: null, source: agent, evidence: "", weaknesses: "", surv: null, elo: null, status: "ACTIVE", survivor: false, top: e.top_hypothesis === t });
           });
           if (e.top_hypothesis && !out.some(function (h) { return h.text === e.top_hypothesis; })) {
-            out.push({ id: agent + "-top", text: e.top_hypothesis, score: null, source: agent, survivor: false, top: true });
+            out.push({ id: agent + "-top", title: e.top_hypothesis, desc: e.top_hypothesis, text: e.top_hypothesis, score: null, source: agent, evidence: "", weaknesses: "", surv: null, elo: null, status: "ACTIVE", survivor: false, top: true });
           }
         });
       });
       return out;
     }
 
+    function numericOrNull(v) {
+      if (v === "" || v == null) return null;
+      var n = Number(v);
+      return isNaN(n) ? null : n;
+    }
+
+    function syncCompareSelectors(list) {
+      var aSel = $("hyp-a"), bSel = $("hyp-b");
+      if (!aSel || !bSel) return;
+      var prevA = aSel.value, prevB = bSel.value;
+      var opts = list.filter(function (h) { return Number.isInteger(Number(h.id)) && String(h.status || "ACTIVE") !== "ARCHIVED"; });
+      var html = opts.map(function (h) {
+        var label = "#" + h.id + " " + (h.title || h.text || "").slice(0, 60);
+        return '<option value="' + esc(h.id) + '">' + esc(label) + "</option>";
+      }).join("");
+      aSel.innerHTML = html; bSel.innerHTML = html;
+      if (opts.length >= 2) { aSel.value = prevA && opts.some(function(o){return String(o.id)===prevA;}) ? prevA : opts[0].id; bSel.value = prevB && opts.some(function(o){return String(o.id)===prevB;}) ? prevB : opts[1].id; }
+      else if (opts.length === 1) { aSel.value = opts[0].id; bSel.value = opts[0].id; }
+    }
+
     function renderHypotheses() {
       var list = collectHypotheses();
       var wrap = $("hyp-cards");
+      if (!wrap) return;
       $("hyp-count").textContent = list.length ? (list.length + " hypotheses") : "";
       $("hyp-empty").hidden = list.length > 0;
+      syncCompareSelectors(list);
       wrap.innerHTML = list.map(function (h) {
         var id = esc(h.id);
-        var text = hypState.edits[h.id] != null ? hypState.edits[h.id] : h.text;
-        var isTop = h.top || hypState.topId === h.id, isSurv = h.survivor || hypState.survivorId === h.id;
-        return '<article class="hyp-card' + (hypState.selected[h.id] ? " is-selected" : "") + (isSurv ? " is-survivor" : "") + (isTop ? " is-top" : "") + '" data-id="' + id + '">' +
-          '<div class="hyp-card-head"><span class="hyp-card-title">Hypothesis ' + esc(h.id) + "</span>" +
-          (isSurv ? '<span class="badge badge-survivor">Survivor</span>' : "") + (isTop ? '<span class="badge badge-top">Top</span>' : "") + "</div>" +
-          '<p class="hyp-text">' + esc(text) + "</p>" +
-          '<p class="muted small">Source: ' + esc(h.source || "—") + (h.score != null ? " · Score: " + esc(h.score) : "") + "</p>" +
-          '<label><input type="checkbox" data-hyp-select="' + id + '"' + (hypState.selected[h.id] ? " checked" : "") + "> Select</label>" +
-          '<label><input type="checkbox" data-hyp-compare="' + id + '"' + (hypState.compare[h.id] ? " checked" : "") + "> Compare</label>" +
-          '<label for="note-' + id + '">Notes</label>' +
-          '<textarea id="note-' + id + '" data-hyp-note="' + id + '" placeholder="Add a note…">' + esc(hypState.notes[h.id] || "") + "</textarea>" +
-          '<div class="btn-row"><button type="button" class="btn btn-ghost btn-small" data-hyp-edit="' + id + '">Edit</button>' +
-          '<button type="button" class="btn btn-ghost btn-small" data-hyp-survivor="' + id + '">Survivor</button>' +
-          '<button type="button" class="btn btn-ghost btn-small" data-hyp-top="' + id + '">Mark top</button></div></article>';
+        var st = h.status || (h.survivor ? "SELECTED" : "ACTIVE");
+        var isArch = st === "ARCHIVED";
+        var isTop = st === "SELECTED" || h.top || hypState.topId === h.id;
+        var isSurv = h.survivor || hypState.survivorId === h.id;
+        var badge = isArch ? '<span class="badge badge-archived">Archived</span>' : (isTop ? '<span class="badge badge-top">Selected / Top</span>' : '<span class="badge badge-active">Active</span>');
+        var editable = Number.isInteger(Number(h.id)) && String(h.id) !== "undefined";
+        return '<article class="hyp-card' + (isSurv ? " is-survivor" : "") + (isTop ? " is-top" : "") + (isArch ? " is-archived" : "") + '" data-id="' + id + '">' +
+          '<div class="hyp-card-head"><span class="hyp-card-title">#' + esc(h.id) + " " + esc(h.title || "") + "</span>" + badge + "</div>" +
+          '<p class="hyp-text">' + esc(h.desc || h.text || "") + "</p>" +
+          '<p class="muted small">Source: ' + esc(h.source || "—") + " · Iter " + esc(h.iteration != null ? h.iteration : "—") + (h.ranking != null ? " · Rank " + esc(h.ranking) : "") + "</p>" +
+          '<dl class="insp-meta">' +
+            '<div><dt>Evidence</dt><dd>' + esc(h.evidence || "—") + "</dd></div>" +
+            '<div><dt>Weaknesses</dt><dd>' + esc(h.weaknesses || "—") + "</dd></div>" +
+            '<div><dt>Survivability</dt><dd>' + esc(h.surv != null ? h.surv : "—") + "</dd></div>" +
+            '<div><dt>ELO</dt><dd>' + esc(h.elo != null ? Math.round(h.elo) : "—") + "</dd></div>" +
+            '<div><dt>Score</dt><dd>' + esc(h.score != null ? h.score : "—") + "</dd></div>" +
+          "</dl>" +
+          (editable ? '<div><label>Notes <input type="text" data-hyp-note-inline="' + id + '" value="' + esc(h.raw && h.raw.notes || hypState.notes[h.id] || "") + '" placeholder="note"></label></div>' : "") +
+          '<div class="btn-row">' +
+            '<button type="button" class="btn btn-ghost btn-small" data-hyp-edit="' + id + '">Edit</button>' +
+            (isArch ? '<button type="button" class="btn btn-ghost btn-small" data-hyp-restore="' + id + '">Restore</button>'
+              : '<button type="button" class="btn btn-primary btn-small" data-hyp-select-top="' + id + '">Select as Top</button>' +
+                '<button type="button" class="btn btn-ghost btn-small" data-hyp-archive="' + id + '">Archive</button>') +
+          "</div></article>";
       }).join("");
     }
 
     function renderHypCompare() {
+      var b = $("hyp-compare"); if (!b) return;
       var list = collectHypotheses().filter(function (h) { return hypState.compare[h.id]; });
-      var box = $("hyp-compare");
-      if (list.length < 2) { box.hidden = true; box.innerHTML = ""; return; }
-      box.hidden = false;
-      box.innerHTML = "<h3>Comparison (" + list.length + ")</h3><table><thead><tr><th>Hypothesis</th><th>Text</th><th>Score</th><th>Source</th><th>Notes</th></tr></thead><tbody>" +
+      if (list.length < 2) { b.hidden = true; b.innerHTML = ""; return; }
+      b.hidden = false;
+      b.innerHTML = "<h3>Comparison (" + list.length + ")</h3><table><thead><tr><th>Hypothesis</th><th>Text</th><th>Score</th><th>Source</th><th>Notes</th></tr></thead><tbody>" +
         list.map(function (h) {
           return "<tr><td>" + esc(h.id) + "</td><td>" + esc(hypState.edits[h.id] != null ? hypState.edits[h.id] : h.text) +
             "</td><td>" + esc(h.score != null ? h.score : "—") + "</td><td>" + esc(h.source || "—") + "</td><td>" +
             esc(hypState.notes[h.id] || "—") + "</td></tr>";
-        }).join("") + "</tbody></table>";
+        }).join("") + "</tbody></table><p class='muted small'>Tick Compare on 2+ cards, then use the A-vs-B panel for the full side-by-side.</p>";
+    }
+
+    function renderCompareResult(cmp) {
+      var box = $("hyp-compare");
+      if (!box || !cmp) return;
+      box.hidden = false;
+      function cell(h) { return esc(h.title || h.text || "—"); }
+      function row(label, get) { return "<tr><th>" + label + "</th><td>" + esc(get(cmp.a)) + "</td><td>" + esc(get(cmp.b)) + "</td></tr>"; }
+      var deltas = cmp.deltas || {};
+      box.innerHTML = "<h3>Hypothesis A vs B</h3><table><thead><tr><th>Field</th><th>A (#" + esc(cmp.a.id) + ")</th><th>B (#" + esc(cmp.b.id) + ")</th></tr></thead><tbody>" +
+        row("Title", function (h) { return h.title || h.text || "—"; }) +
+        row("Description", function (h) { return h.desc || h.description || h.text || "—"; }) +
+        row("Source agent", function (h) { return h.source_agent || h.agent || h.source || "—"; }) +
+        row("Strengths (evidence)", function (h) { return h.evidence || h.strengths || "—"; }) +
+        row("Weaknesses", function (h) { return h.weaknesses || "—"; }) +
+        row("Survivability", function (h) { return h.survivability != null ? h.survivability : (h.survivability_score != null ? h.survivability_score : "—"); }) +
+        row("ELO rating", function (h) { return h.elo_rating != null ? Math.round(h.elo_rating) : "—"; }) +
+        row("Ranking", function (h) { return h.ranking != null ? h.ranking : (h.rank != null ? h.rank : "—"); }) +
+        row("Selection status", function (h) { return h.status || h.selection || (h.is_survivor ? "SELECTED" : "ACTIVE"); }) +
+        row("Iteration", function (h) { return h.iteration != null ? h.iteration : "—"; }) +
+        "</tbody></table>" +
+        "<p class='muted small'>Survivability A-B: " + esc(deltas.survivability_diff != null ? deltas.survivability_diff : "n/a") +
+          " · ELO A-B: " + esc(deltas.elo_diff != null ? deltas.elo_diff : "n/a") +
+          (cmp.verdict && cmp.verdict.winner ? " · Winner #" + esc(cmp.verdict.winner) + " — ELO updated (K=32)." : " · No winner declared — verdict is not fabricated.") +
+        "</p>";
     }
 
     var hypWrap = $("hyp-cards");
     if (hypWrap) {
       hypWrap.addEventListener("change", function (ev) {
         var t = ev.target;
-        if (t.matches("[data-hyp-select]")) hypState.selected[t.dataset.hypSelect] = t.checked;
-        if (t.matches("[data-hyp-compare]")) { hypState.compare[t.dataset.hypCompare] = t.checked; renderHypCompare(); }
-        if (t.matches("[data-hyp-note]")) { hypState.notes[t.dataset.hypNote] = t.value; renderHypCompare(); }
+        if (t.matches("[data-hyp-note-inline]")) { hypState.notes[t.dataset.hypNoteInline] = t.value; }
       });
       hypWrap.addEventListener("click", function (ev) {
         var b = ev.target.closest("button"); if (!b) return;
+        function apiId(id) { var n = Number(id); return Number.isInteger(n) ? n : null; }
         if (b.dataset.hypEdit) {
-          var id = b.dataset.hypEdit, card = b.closest(".hyp-card"), txt = card.querySelector(".hyp-text");
-          var cur = hypState.edits[id] != null ? hypState.edits[id] : (collectHypotheses().filter(function (h) { return h.id === id; })[0] || {}).text || "";
-          var next = window.prompt("Edit hypothesis text:", cur);
-          if (next != null) { hypState.edits[id] = next; renderHypotheses(); renderHypCompare(); }
+          var id = b.dataset.hypEdit;
+          var hid = apiId(id);
+          var h = collectHypotheses().filter(function (x) { return String(x.id) === String(id); })[0] || {};
+          if (hid == null) { alert("Offline hypothesis — cannot edit until backend is online."); return; }
+          var nt = window.prompt("Title:", h.title || "");
+          if (nt == null) return;
+          var nd = window.prompt("Description:", h.desc || "");
+          if (nd == null) return;
+          var ne = window.prompt("Supporting evidence (blank = unknown):", h.evidence || "");
+          if (ne == null) return;
+          var nw = window.prompt("Weaknesses:", h.weaknesses || "");
+          if (nw == null) return;
+          var ns = window.prompt("Survivability 0-10 (blank = unknown):", h.surv != null ? String(h.surv) : "");
+          if (ns == null) return;
+          var nelo = window.prompt("ELO 0-4000 (blank = unrated):", h.elo != null ? String(Math.round(h.elo)) : "");
+          if (nelo == null) return;
+          var payload = { title: nt, description: nd, evidence: ne, weaknesses: nw };
+          var surv = numericOrNull(ns); if (surv != null) payload.survivability = surv;
+          var elo = numericOrNull(nelo); if (elo != null) payload.elo_rating = elo;
+          hypMsg("Saving edit…");
+          ctx.api.updateHyp(ctx.state.runId, hid, payload).then(function () { hypMsg("Hypothesis edited and saved to SQLite."); ctx.refresh(); })
+            .catch(function (err) { hypMsg("Edit failed: " + err.message); });
         }
-        if (b.dataset.hypSurvivor) { hypState.survivorId = b.dataset.hypSurvivor; renderHypotheses(); }
-        if (b.dataset.hypTop) {
-          hypState.topId = b.dataset.hypTop;
-          var h = collectHypotheses().filter(function (x) { return x.id === hypState.topId; })[0];
-          renderHypotheses();
-          if (h && ctx.state.runId) {
-            ctx.api.saveTop(ctx.state.runId, hypState.edits[h.id] != null ? hypState.edits[h.id] : h.text).catch(function () { /* optional endpoint */ });
-          }
+        if (b.dataset.hypSelectTop) {
+          var hid2 = apiId(b.dataset.hypSelectTop);
+          if (hid2 == null) return;
+          hypMsg("Selecting as Top (Crow will receive it)…");
+          ctx.api.selectHyp(ctx.state.runId, hid2).then(function (d) {
+            hypMsg("Top selected: " + (d.top_hypothesis || "") + " — saved to SQLite, available to Crow.");
+            ctx.refresh();
+          }).catch(function (err) { hypMsg("Select failed: " + err.message); });
+        }
+        if (b.dataset.hypArchive) {
+          var hid3 = apiId(b.dataset.hypArchive);
+          if (hid3 == null) return;
+          ctx.api.archiveHyp(ctx.state.runId, hid3).then(function () { hypMsg("Archived."); ctx.refresh(); })
+            .catch(function (err) { hypMsg("Archive failed: " + err.message); });
+        }
+        if (b.dataset.hypRestore) {
+          var hid4 = apiId(b.dataset.hypRestore);
+          if (hid4 == null) return;
+          ctx.api.restoreHyp(ctx.state.runId, hid4).then(function () { hypMsg("Restored to Active."); ctx.refresh(); })
+            .catch(function (err) { hypMsg("Restore failed: " + err.message); });
         }
       });
     }
     var cmpBtn = $("hyp-compare-btn");
-    if (cmpBtn) cmpBtn.addEventListener("click", renderHypCompare);
+    if (cmpBtn) cmpBtn.addEventListener("click", function () {
+      var a = $("hyp-a").value, bsel = $("hyp-b").value;
+      if (!a || !bsel) { hypMsg("Pick A and B first (or tick Compare then Compare selected)."); renderHypCompare(); return; }
+      hypMsg("Comparing…");
+      ctx.api.compareHyps(ctx.state.runId, a, bsel, null).then(function (cmp) {
+        renderCompareResult(cmp); hypMsg("Compared #" + a + " vs #" + bsel + ".");
+      }).catch(function (err) { hypMsg("Compare failed: " + err.message); });
+    });
+    var cmpGo = $("hyp-compare-go");
+    if (cmpGo) cmpGo.addEventListener("click", function () {
+      var a = $("hyp-a").value, bsel = $("hyp-b").value;
+      if (!a || !bsel || a === bsel) { hypMsg("Compare needs two different hypotheses."); return; }
+      var w = $("hyp-winner").value;
+      var winner = w === "a" ? a : (w === "b" ? bsel : null);
+      hypMsg(winner ? "Comparing + recording winner (ELO update)…" : "Comparing…");
+      ctx.api.compareHyps(ctx.state.runId, a, bsel, winner).then(function (cmp) {
+        renderCompareResult(cmp); hypMsg(winner ? ("Winner #" + winner + " — ELO updated, saved to SQLite.") : "Compared — no winner declared.");
+        ctx.refresh();
+      }).catch(function (err) { hypMsg("Compare failed: " + err.message); });
+    });
+    var impBtn = $("hyp-import-btn");
+    if (impBtn) impBtn.addEventListener("click", function () {
+      hypMsg("Importing from Generation/Evolution/Ranking outputs…");
+      ctx.api.importHyps(ctx.state.runId, {}).then(function (d) {
+        hypMsg(d.message + (d.parse_ok ? "" : " Use + Manual hypothesis below."));
+        ctx.refresh();
+      }).catch(function (err) { hypMsg("Import failed: " + err.message); });
+    });
+    var newToggle = $("hyp-new-toggle");
+    if (newToggle) newToggle.addEventListener("click", function () {
+      var w = $("hyp-new-wrap");
+      w.hidden = !w.hidden;
+      newToggle.setAttribute("aria-expanded", w.hidden ? "false" : "true");
+    });
+    var newForm = $("hyp-new-form");
+    if (newForm) newForm.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      function v(id) { return $(id).value.trim(); }
+      var payload = { title: v("nh-title"), description: v("nh-desc"), origin_agent: $("nh-source").value, status: $("nh-status").value };
+      if (v("nh-evidence")) payload.evidence = v("nh-evidence");
+      if (v("nh-weak")) payload.weaknesses = v("nh-weak");
+      var surv = numericOrNull(v("nh-surv")); if (surv != null) payload.survivability = surv;
+      var elo = numericOrNull(v("nh-elo")); if (elo != null) payload.elo_rating = elo;
+      var iter = numericOrNull(v("nh-iter")); if (iter != null) payload.iteration = iter;
+      if (payload.status === "SELECTED") payload.is_survivor = true;
+      ctx.api.createHyp(ctx.state.runId, payload).then(function () {
+        hypMsg("Hypothesis created and saved to SQLite.");
+        newForm.reset(); $("hyp-new-wrap").hidden = true; $("hyp-new-toggle").setAttribute("aria-expanded", "false");
+        ctx.refresh();
+      }).catch(function (err) { hypMsg("Create failed: " + err.message); });
+    });
 
     /** ---------- ranking table ---------- */
     function renderRanking() {

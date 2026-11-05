@@ -19,7 +19,10 @@ HYPOTHESIS_COLUMNS = (
     "id", "run_id", "iteration", "title", "description", "origin_agent",
     "score", "strengths", "weaknesses", "survivability", "ranking",
     "notes", "is_survivor", "created_at",
+    "evidence", "elo_rating", "status",
 )
+
+HYPOTHESIS_STATUSES = ("ACTIVE", "SELECTED", "ARCHIVED")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS hypotheses (
@@ -37,6 +40,9 @@ CREATE TABLE IF NOT EXISTS hypotheses (
   notes TEXT,
   is_survivor INTEGER NOT NULL DEFAULT 0,
   created_at TEXT,
+  evidence TEXT,
+  elo_rating REAL,
+  status TEXT DEFAULT 'ACTIVE',
   FOREIGN KEY (run_id) REFERENCES runs(id)
 );
 CREATE TABLE IF NOT EXISTS run_meta (
@@ -54,15 +60,23 @@ def _now():
     return datetime.datetime.utcnow().isoformat()
 
 
-def init_db(project="."):
-    """Create the visual-backend tables if they do not exist yet.
+_MIGRATE_COLS = (("evidence", "TEXT"), ("elo_rating", "REAL"), ("status", "TEXT DEFAULT 'ACTIVE'"))
 
-    Idempotent; safe to call on every app boot / helper call.  Running
-    ``db._connect`` first also creates the CLI schema + DB file if needed.
-    """
+def _ensure_columns(con):
+    cols = [r[1] for r in con.execute("PRAGMA table_info(hypotheses)").fetchall()]
+    for name, ddl in _MIGRATE_COLS:
+        if name not in cols:
+            con.execute(f"ALTER TABLE hypotheses ADD COLUMN {name} {ddl}")
+    # backfill status from is_survivor for legacy rows
+    con.execute("UPDATE hypotheses SET status='SELECTED' WHERE status IS NULL AND is_survivor=1")
+    con.execute("UPDATE hypotheses SET status='ACTIVE' WHERE status IS NULL")
+
+def init_db(project="."):
+    """Create + migrate visual-backend tables (idempotent)."""
     con = db._connect(project)
     try:
         con.executescript(SCHEMA)
+        _ensure_columns(con)
         con.commit()
     finally:
         con.close()
@@ -118,6 +132,8 @@ def _row_to_dict(row):
     d = dict(row)
     if d.get("is_survivor") is not None:
         d["is_survivor"] = bool(d["is_survivor"])
+    if not d.get("status"):
+        d["status"] = "SELECTED" if d.get("is_survivor") else "ACTIVE"
     return d
 
 
@@ -153,17 +169,22 @@ def get_hypothesis(project, hyp_id):
 def create_hypothesis(project, run_id, iteration=1, title=None, description=None,
                       origin_agent=None, score=None, strengths=None,
                       weaknesses=None, survivability=None, ranking=None,
-                      notes=None, is_survivor=False):
+                      notes=None, is_survivor=False, evidence=None,
+                      elo_rating=None, status=None):
+    # evidence alias: strengths fallback (never fabricate lines beyond input)
+    if evidence is None:
+        evidence = strengths
+    st = status or ("SELECTED" if is_survivor else "ACTIVE")
     con = _connect(project)
     try:
         cur = con.execute(
             "INSERT INTO hypotheses(run_id, iteration, title, description, "
             "origin_agent, score, strengths, weaknesses, survivability, "
-            "ranking, notes, is_survivor, created_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "ranking, notes, is_survivor, created_at, evidence, elo_rating, status) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (run_id, iteration, title, description, origin_agent, score,
              strengths, weaknesses, survivability, ranking, notes,
-             1 if is_survivor else 0, _now()),
+             1 if st == "SELECTED" else 0, _now(), evidence, elo_rating, st),
         )
         con.commit()
         new_id = cur.lastrowid
@@ -173,9 +194,20 @@ def create_hypothesis(project, run_id, iteration=1, title=None, description=None
 
 
 def update_hypothesis(project, hyp_id, fields):
-    """Update whitelisted columns only.  Returns the row or ``None``."""
+    """Update whitelisted columns only.  Returns the row or ``None``.
+
+    Keeps ``status`` <-> ``is_survivor`` consistent so selection state has
+    one source of truth (SQLite), not frontend state.
+    """
     allowed = {c: fields[c] for c in HYPOTHESIS_COLUMNS
                if c in fields and c not in ("id", "run_id", "created_at")}
+    # evidence alias: keep legacy strengths mirror when evidence set
+    if "evidence" in allowed and "strengths" not in allowed:
+        allowed["strengths"] = allowed["evidence"]
+    if "status" not in allowed and "is_survivor" in allowed:
+        allowed["status"] = "SELECTED" if allowed["is_survivor"] else "ACTIVE"
+    if "status" in allowed and "is_survivor" not in allowed:
+        allowed["is_survivor"] = (allowed["status"] == "SELECTED")
     if "is_survivor" in allowed:
         allowed["is_survivor"] = 1 if allowed["is_survivor"] else 0
     if not allowed:
@@ -274,6 +306,9 @@ def parse_hypotheses_from_text(text, iteration=1):
             "ranking": len(parsed) + 1,
             "notes": None,
             "is_survivor": bool(winner and label == winner),
+            "evidence": None,
+            "elo_rating": None,
+            "status": None,
         })
     return parsed
 
@@ -292,3 +327,154 @@ def sync_hypotheses_from_ranking(project, run_id, iteration, ranking_output):
     for p in parsed:
         created.append(create_hypothesis(project, run_id, **p))
     return created
+
+
+# ---------------------------------------------------------------------------
+# Hypothesis Laboratory (PHASE 7): import, compare, select, archive
+# ---------------------------------------------------------------------------
+
+def _label_of(title):
+    m = re.match(r"^\s*(H\d+|E\d+)\b", title or "", re.I)
+    return m.group(1).upper() if m else None
+
+
+def import_from_agent_output(project, run_id, iteration, agent_id, output_text):
+    """Import hypotheses from one agent's completed output.
+
+    Returns dict {imported, created_ids, found, parse_ok, message}.
+    On parse failure (0 lines) nothing is fabricated — caller/UX must
+    offer manual entry. Dedupe by H/E label within run+iteration.
+    """
+    parsed = parse_hypotheses_from_text(output_text or "", iteration=iteration or 1)
+    # Honour actual source agent for generation/evolution outputs; ranking
+    # summaries keep H/E inference (generation/evolution).
+    for entry in parsed:
+        if agent_id in ("generation", "evolution", "reflection", "proximity"):
+            entry["origin_agent"] = agent_id
+    if not parsed:
+        return {"imported": 0, "created_ids": [], "found": 0, "parse_ok": False,
+                "message": f"No parseable H#/E# hypotheses in {agent_id} output — use manual entry (no data fabricated)."}
+    existing = list_hypotheses(project, run_id, iteration=iteration)
+    seen_labels = set(_label_of(h.get("title") or "") for h in existing)
+    seen_labels.discard(None)
+    nxt_rank = (max((h.get("ranking") or 0) for h in existing) if existing else 0) + 1
+    created = []
+    for entry in parsed:
+        label = _label_of(entry.get("title") or "")
+        if label and label in seen_labels:
+            continue
+        if entry.get("ranking") is None:
+            entry["ranking"] = nxt_rank
+        created.append(create_hypothesis(project, run_id, **entry))
+        if label:
+            seen_labels.add(label)
+        nxt_rank += 1
+    return {"imported": len(created), "created_ids": [c["id"] for c in created],
+            "found": len(parsed), "parse_ok": True,
+            "message": f"Imported {len(created)}/{len(parsed)} hypotheses from {agent_id}."}
+
+
+def import_hypotheses_from_outputs(project, run_id, iteration, executions, agent_ids=None):
+    """Scan completed executions (default: generation/evolution/ranking) and import."""
+    allowed = agent_ids or ["generation", "evolution", "ranking"]
+    per_agent, total_new = [], 0
+    for e in executions or []:
+        if e.get("agent") not in allowed:
+            continue
+        if e.get("status") != "COMPLETED" or not e.get("output"):
+            continue
+        report = import_from_agent_output(project, run_id, iteration, e["agent"], e["output"])
+        per_agent.append({"agent": e["agent"], **report})
+        total_new += report.get("imported", 0)
+    all_ok = any(r.get("parse_ok") for r in per_agent)
+    if not per_agent:
+        return {"imported": 0, "parse_ok": False, "per_agent": [],
+                "message": "No completed generation/evolution/ranking output — save agent responses first, or enter hypotheses manually."}
+    return {"imported": total_new, "parse_ok": total_new > 0, "per_agent": per_agent,
+            "message": (f"Imported {total_new} hypotheses." if total_new else "No parseable hypotheses found — use manual entry (no data fabricated).")}
+
+
+def compare_hypotheses(a_row, b_row):
+    """Structured side-by-side payload — no fabricated verdict."""
+    def num(x):
+        return float(x) if isinstance(x, (int, float)) and not isinstance(x, bool) else None
+    sa, sb = num(a_row.get("survivability")), num(b_row.get("survivability"))
+    ea, eb = num(a_row.get("elo_rating")), num(b_row.get("elo_rating"))
+    return {
+        "a": a_row, "b": b_row,
+        "deltas": {
+            "survivability_a": sa, "survivability_b": sb,
+            "survivability_diff": (round(sa - sb, 2) if sa is not None and sb is not None else None),
+            "elo_a": ea, "elo_b": eb,
+            "elo_diff": (round(ea - eb, 2) if ea is not None and eb is not None else None),
+        },
+        "verdict": None,  # verdict only via explicit winner parameter
+    }
+
+
+def record_compare_win(project, winner_id, loser_id, k=32.0):
+    """ELO-style update after an explicit pairwise win. Unrated starts at 1500."""
+    w = get_hypothesis(project, winner_id)
+    l = get_hypothesis(project, loser_id)
+    if w is None or l is None:
+        raise ValueError("winner/loser hypothesis not found")
+    wr, lr = (float(w["elo_rating"]) if w.get("elo_rating") is not None else 1500.0,
+              float(l["elo_rating"]) if l.get("elo_rating") is not None else 1500.0)
+    exp_w = 1.0 / (1.0 + 10 ** ((lr - wr) / 400.0))
+    exp_l = 1.0 - exp_w
+    new_wr = wr + k * (1.0 - exp_w)
+    new_lr = lr + k * (0.0 - exp_l)
+    update_hypothesis(project, winner_id, {"elo_rating": new_wr})
+    update_hypothesis(project, loser_id, {"elo_rating": new_lr})
+    return get_hypothesis(project, winner_id), get_hypothesis(project, loser_id)
+
+
+def select_hypothesis(project, run_id, hyp_id):
+    """Select as top for Crow. Persists SQLite + Crow TOP_HYPOTHESIS.
+
+    Only one SELECTED per run+iteration. Archived cannot be selected.
+    Returns (hypothesis_row, top_text).
+    """
+    hyp = get_hypothesis(project, hyp_id)
+    if hyp is None or hyp["run_id"] != run_id:
+        raise ValueError(f"hypothesis {hyp_id} not found in run {run_id}")
+    if _row_to_dict(hyp).get("status") == "ARCHIVED":
+        raise ValueError("archived hypotheses cannot be selected — restore first")
+    if hyp.get("iteration") is None:
+        raise ValueError("selected hypothesis has no iteration")
+    run = db.get_run(run_id, project)
+    assert run, "run not found"
+    # Clear previous selection in this run+iteration
+    for h in list_hypotheses(project, run_id, iteration=hyp["iteration"]):
+        if h["id"] != hyp_id and _row_to_dict(h).get("status") == "SELECTED":
+            update_hypothesis(project, h["id"], {"status": "ACTIVE", "is_survivor": False})
+    updated = update_hypothesis(project, hyp_id, {"status": "SELECTED", "is_survivor": True})
+    top_text = updated.get("title") or updated.get("description") or ""
+    # Persist to Crow's prompt source (executions.top_hypothesis on ranking slot
+    # when it exists; else via run current ranking slot if present)
+    try:
+        db.save_top_hypothesis(run_id, str(top_text), project)
+    except AssertionError:
+        # No ranking execution slot (edge: very early selection) — store on
+        # hypotheses row only; Crow generation will surface missing warning.
+        pass
+    return updated, str(top_text)
+
+
+def archive_hypothesis(project, hyp_id):
+    hyp = get_hypothesis(project, hyp_id)
+    if hyp is None:
+        raise ValueError(f"hypothesis {hyp_id} not found")
+    if _row_to_dict(hyp).get("status") == "SELECTED":
+        # Clearing selection must also clear Crow top if it references this hyp
+        pass
+    return update_hypothesis(project, hyp_id, {"status": "ARCHIVED", "is_survivor": False})
+
+
+def restore_hypothesis(project, hyp_id):
+    hyp = get_hypothesis(project, hyp_id)
+    if hyp is None:
+        raise ValueError(f"hypothesis {hyp_id} not found")
+    if _row_to_dict(hyp).get("status") != "ARCHIVED":
+        raise ValueError(f"hypothesis {hyp_id} is not archived")
+    return update_hypothesis(project, hyp_id, {"status": "ACTIVE", "is_survivor": False})

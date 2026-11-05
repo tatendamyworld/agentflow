@@ -135,3 +135,21 @@ Rules enforced:
 - Archive: `POST /api/runs/:id/archive` (`COMPLETED` → `ARCHIVED`, terminal).
 
 Tests: `tests/test_workflow_state.py` (16 tests). Full suite (`pytest tests/`): 62 passed.
+
+## PHASE 7 — Hypothesis Laboratory
+
+Functional research workspace over `.agentflow/state.db` (SQLite only, no fabrication).
+
+Model (`hypotheses` + migration for old DBs): `id, title, description, source_agent, evidence, weaknesses, survivability (0–10), elo_rating (0–4000, unrated=null), status (ACTIVE/SELECTED/ARCHIVED), iteration, ranking, score, notes`.
+
+Operations (real API + dashboard cards):
+- **Create manually** — `POST /api/runs/:id/hypotheses` (+ dashboard form; unknown fields stay blank).
+- **Import from agent outputs** — `POST /hypotheses/import` scans completed Generation/Evolution/Ranking `H#/E#` lines; dedupes by label; parse failure returns `parse_ok:false` + manual-entry message, imports 0 (never fabricates scores/evidence).
+- **Edit** — `PATCH /hypotheses/:id` (title/desc/evidence/weaknesses/surv/elo/status).
+- **Compare** — `GET|POST /hypotheses/compare?a=&b=[&winner=]` side-by-side (strengths/evidence/weaknesses/surv/ELO/ranking/selection/iteration) + deltas; explicit winner applies ELO K=32 (unrated=1500 prior) and persists.
+- **Select** — `POST /hypotheses/:id/select` (one SELECTED per run+iteration) writes `executions.top_hypothesis` so Crow's `{{TOP_HYPOTHESIS}}` embeds it; architected/Crow preview verified.
+- **Archive/Restore** — `POST .../archive` → `ARCHIVED` (excluded from ranking, cannot select); `POST .../restore` → `ACTIVE`.
+
+Validation: surv 0–10, ELO 0–4000, status enum, agent-or-`manual`; invalid → 400 (no storage).
+
+Tests: `tests/test_hypothesis_lab.py` (8 tests). Full suite (`pytest tests/`): 70 passed.

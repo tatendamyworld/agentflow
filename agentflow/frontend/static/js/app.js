@@ -79,6 +79,13 @@
     runHistory: function (id) { return req("/api/runs/" + encodeURIComponent(id) + "/history"); },
     saveTop: function (id, text) { return req("/api/runs/" + encodeURIComponent(id) + "/save-top", { method: "POST", body: { top_hypothesis: text } }).catch(function () { return req("/api/runs/" + encodeURIComponent(id) + "/save", { method: "POST", body: { agent: "ranking", top_hypothesis: text, output: text } }); }); },
     finch: function (id, responses) { return req("/api/runs/" + encodeURIComponent(id) + "/finch", { method: "POST", body: { responses: responses } }); },
+    createHyp: function (id, payload) { return req("/api/runs/" + encodeURIComponent(id) + "/hypotheses", { method: "POST", body: payload }); },
+    updateHyp: function (id, hypId, payload) { return req("/api/runs/" + encodeURIComponent(id) + "/hypotheses/" + encodeURIComponent(hypId), { method: "PATCH", body: payload }); },
+    importHyps: function (id, payload) { return req("/api/runs/" + encodeURIComponent(id) + "/hypotheses/import", { method: "POST", body: payload || {} }); },
+    compareHyps: function (id, a, b, winner) { return req("/api/runs/" + encodeURIComponent(id) + "/hypotheses/compare", { method: "POST", body: { a: a, b: b, winner: winner } }); },
+    selectHyp: function (id, hypId) { return req("/api/runs/" + encodeURIComponent(id) + "/hypotheses/" + encodeURIComponent(hypId) + "/select", { method: "POST", body: {} }); },
+    archiveHyp: function (id, hypId) { return req("/api/runs/" + encodeURIComponent(id) + "/hypotheses/" + encodeURIComponent(hypId) + "/archive", { method: "POST", body: {} }); },
+    restoreHyp: function (id, hypId) { return req("/api/runs/" + encodeURIComponent(id) + "/hypotheses/" + encodeURIComponent(hypId) + "/restore", { method: "POST", body: {} }); },
     archive: function (id) { return req("/api/runs/" + encodeURIComponent(id) + "/archive", { method: "POST", body: {} }); },
     runStatus: function (id) { return req("/api/runs/" + encodeURIComponent(id) + "/status"); },
   };
