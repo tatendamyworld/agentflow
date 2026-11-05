@@ -1599,14 +1599,105 @@ def create_app(project="."):
             return failure
         if db.get_consensus(run_id, project=project) is None:
             return err("cannot loop before Finch consensus", 409)
+        prev_it = run["current_iteration"]
+        # inheritance captured BEFORE increment (previous findings preserved, statuses NOT copied)
+        prev_summary = backend_models.iteration_summary(project, run_id, prev_it)
+        prev_exes = db.get_executions(run_id, iteration=prev_it, project=project)
+        inherited_top = prev_summary.get("top_hypothesis") or top_hypothesis_for(run, prev_exes) or ""
+        inherited_cons = consensus_payload(db.get_consensus(run_id, project=project)) if db.get_consensus(run_id, project=project) else None
         try:
             new_it = db.new_iteration(run_id, project)
         except AssertionError as exc:
             return err(str(exc), 409)
         fresh = db.get_run(run_id, project)
+        # Fresh Supervisor prompt for the new iteration (inherits goal + previous consensus + top)
+        prompt, unresolved, sup_payload = "", [], None
+        try:
+            fresh_exes = current_exes(fresh)
+            if _ops is not None:
+                sup_payload = _ops.build_prompt_preview("supervisor", fresh, fresh_exes, save=True, project=project)
+                prompt, unresolved = sup_payload["prompt"], sup_payload["unresolved"]
+            else:
+                prompt, unresolved = render_and_save(fresh, "supervisor")
+        except Exception:
+            pass
+        fresh_status = db.get_execution(run_id, "supervisor", project=project)
         payload = run_payload(fresh)
         return jsonify({**payload, "run": payload, "iteration": new_it,
-                        "current_iteration": new_it})
+                        "current_iteration": new_it,
+                        "inherited": {"goal": fresh["goal"], "previous_iteration": prev_it,
+                                      "previous_consensus": inherited_cons, "previous_top_hypothesis": inherited_top,
+                                      "previous_unresolved": prev_summary.get("unresolved", [])},
+                        "supervisor_prompt": prompt, "supervisor_unresolved": unresolved,
+                        "supervisor_status": (fresh_status or {}).get("status"),
+                        "preserved": {"previous_completed": prev_summary.get("completed", []), "previous_hypothesis_count": len(prev_summary.get("hypotheses", []))}})
+
+    @app.route("/api/runs/<run_id>/iterations", methods=["GET"])
+    def list_iterations(run_id):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        its = backend_models.list_iterations(project, run_id)
+        out = []
+        for it in its:
+            exes = db.get_executions(run_id, iteration=it, project=project)
+            done = sum(1 for e in exes if e["status"] == "COMPLETED")
+            out.append({"iteration": it, "current": it == run["current_iteration"], "completed": done,
+                        "total": len(exes), "consensus": consensus_payload(db.get_consensus(run_id, iteration=it, project=project)) if db.get_consensus(run_id, iteration=it, project=project) else None,
+                        "summary": {"top_hypothesis": backend_models.iteration_summary(project, run_id, it).get("top_hypothesis"), "hypothesis_count": len(backend_models.list_hypotheses(project, run_id, iteration=it))}})
+        return jsonify(run_id=run_id, iterations=out)
+
+    @app.route("/api/runs/<run_id>/iterations/switch", methods=["POST"])
+    def switch_iteration(run_id):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        data = body()
+        if data is None:
+            return err("request body must be a JSON object")
+        it = data.get("iteration", data.get("to", data.get("current_iteration")))
+        if isinstance(it, bool) or not isinstance(it, int) or it < 1:
+            return err("iteration must be a positive integer")
+        its = backend_models.list_iterations(project, run_id)
+        if it not in its:
+            return err(f"iteration {it} not found (available: {its})", 404)
+        con = db._connect(project)
+        con.execute("UPDATE runs SET current_iteration=?, updated_at=? WHERE id=?", (it, db._now(), run_id))
+        con.commit(); con.close()
+        fresh = db.get_run(run_id, project)
+        payload = run_payload(fresh)
+        return jsonify({**payload, "run": payload, "iteration": it, "current_iteration": it})
+
+    @app.route("/api/runs/<run_id>/iterations/compare", methods=["GET", "POST"])
+    def compare_iterations_ep(run_id):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        src = dict(request.args)
+        if request.method == "POST":
+            b = body() or {}
+            src.update({k: v for k, v in b.items() if v is not None})
+        def _int(v):
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return None
+        a = _int(src.get("a", src.get("iteration_a")))
+        b = _int(src.get("b", src.get("iteration_b")))
+        its = backend_models.list_iterations(project, run_id)
+        if a is None or b is None:
+            return err(f"provide a and b iteration numbers (available: {its})")
+        if a not in its or b not in its:
+            return err(f"iterations {a},{b} not found (available: {its})", 404)
+        cmp_payload = backend_models.compare_iterations(project, run_id, a, b)
+        # frontend-friendly flat
+        return jsonify(run_id=run_id, a=a, b=b,
+                       hypothesis_changes=cmp_payload["hypothesis_changes"],
+                       ranking_changes=cmp_payload["ranking_changes"],
+                       consensus_change=cmp_payload["consensus_change"],
+                       new_findings=cmp_payload["new_findings"],
+                       unresolved=cmp_payload["unresolved"],
+                       comparison=cmp_payload)
 
     @app.route("/api/runs/<run_id>/diff/<other_id>", methods=["GET"])
     def diff(run_id, other_id):

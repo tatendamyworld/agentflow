@@ -57,6 +57,10 @@
   }
 
   var api = {
+    listIterations: function (id) { return req("/api/runs/" + encodeURIComponent(id) + "/iterations"); },
+    switchIteration: function (id, it) { return req("/api/runs/" + encodeURIComponent(id) + "/iterations/switch", { method: "POST", body: { iteration: it } }); },
+    compareIterations: function (id, a, b) { return req("/api/runs/" + encodeURIComponent(id) + "/iterations/compare?a=" + encodeURIComponent(a) + "&b=" + encodeURIComponent(b)); },
+    loop: function (id) { return req("/api/runs/" + encodeURIComponent(id) + "/loop", { method: "POST", body: {} }); },
     listRuns: function () { return req("/api/runs").then(pickRuns); },
     createRun: function (goal) {
       return req("/api/runs", { method: "POST", body: { goal: goal } }).then(function (d) {

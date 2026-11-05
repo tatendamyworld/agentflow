@@ -801,3 +801,110 @@ def sync_workspace_from_output(project, run_id, workspace, iteration, output_tex
     notes, _ = get_workspace_notes(project, run_id, workspace, iteration)
     return {"notes": notes, "parsed_fields": list(nonempty.keys()), "parse_ok": bool(nonempty),
             "message": ("Parsed " + str(len(nonempty)) + " sections." if nonempty else "No recognised section headings — paste with ## headings or edit manually (no data fabricated).")}
+
+
+# ---------------------------------------------------------------------------
+# Iteration Engine (PHASE 11): summaries, unresolved, comparison
+# ---------------------------------------------------------------------------
+
+def parse_unresolved(text):
+    """Unresolved questions from Unknowns/Questions sections or lines ending ?."""
+    if not text or not str(text).strip():
+        return []
+    out = []
+    in_section = False
+    for line in str(text).splitlines():
+        h = re.match(r"^##\s+(.+)$", line.strip(), re.I)
+        if h:
+            in_section = h.group(1).strip().lower() in ("unknowns", "unknown", "unresolved", "open questions", "questions")
+            continue
+        stripped = line.strip()
+        if in_section and stripped and not stripped.startswith("```"):
+            out.append(stripped.lstrip("-*•0123456789. ").strip())
+        elif stripped.endswith("?") and stripped not in out:
+            out.append(stripped)
+    return [o for o in out if o]
+
+
+def iteration_summary(project, run_id, iteration):
+    """Full per-iteration snapshot from stored rows (executions, hypotheses, consensus, finch, workspaces)."""
+    from agentflow import db as _db
+    run = _db.get_run(run_id, project)
+    exes = _db.get_executions(run_id, iteration=iteration, project=project) if iteration else []
+    cons = None
+    try:
+        cons = _db.get_consensus(run_id, iteration=iteration, project=project) if iteration else None
+    except Exception:
+        cons = None
+    finch = []
+    try:
+        finch = _db.get_finch_runs(run_id, iteration=iteration, project=project) if iteration else []
+    except Exception:
+        finch = []
+    hyps = list_hypotheses(project, run_id, iteration=iteration)
+    # winning hypothesis text: SELECTED review else executions top/regex
+    top = ""
+    for e in exes:
+        if e.get("top_hypothesis"):
+            top = e["top_hypothesis"]
+    if not top:
+        for h in hyps:
+            if _row_to_dict(h).get("status") == "SELECTED":
+                top = h.get("title") or h.get("description") or ""
+    if not top:
+        rank_out = next((e.get("output") for e in exes if e.get("agent") == "ranking" and e.get("output")), "")
+        m = re.search(r"Top hypothesis:\s*(.+)", rank_out or "", re.I)
+        if m:
+            top = m.group(1).strip()
+    unresolved = []
+    for e in exes:
+        if e.get("output"):
+            unresolved.extend(parse_unresolved(e["output"]))
+    # dedupe preserve order
+    seen = set(); uniq = []
+    for u in unresolved:
+        if u not in seen:
+            seen.add(u); uniq.append(u)
+    return {"iteration": iteration, "goal": (run or {}).get("goal"), "status": (run or {}).get("status") if (run and run.get("current_iteration") == iteration) else None,
+            "executions": exes, "hypotheses": hyps, "consensus": cons, "finch": finch,
+            "top_hypothesis": top, "unresolved": uniq,
+            "completed": sorted([e["agent"] for e in exes if e.get("status") == "COMPLETED"])}
+
+
+def list_iterations(project, run_id):
+    from agentflow import db as _db
+    exes = _db.get_executions(run_id, project=project)
+    its = sorted({e.get("iteration") for e in exes if e.get("iteration") is not None})
+    run = _db.get_run(run_id, project)
+    if not its and run:
+        its = [run.get("current_iteration", 1)]
+    return its
+
+
+def compare_iterations(project, run_id, a, b):
+    """Compare two iterations: hypotheses/rankings/consensus/new findings/unresolved."""
+    sa, sb = iteration_summary(project, run_id, a), iteration_summary(project, run_id, b)
+    def titles(s):
+        return {(_label_of(h.get("title") or "") or h.get("title") or str(h["id"])): h for h in s.get("hypotheses") or []}
+    ta, tb = titles(sa), titles(sb)
+    added = [tb[k] for k in tb if k not in ta]
+    removed = [ta[k] for k in ta if k not in tb]
+    ranking_changes = []
+    for k in set(ta) & set(tb):
+        ha, hb = ta[k], tb[k]
+        if ha.get("ranking") != hb.get("ranking") or ha.get("elo_rating") != hb.get("elo_rating") or (ha.get("status") or "") != (hb.get("status") or ""):
+            ranking_changes.append({"label": k, "a_rank": ha.get("ranking"), "b_rank": hb.get("ranking"),
+                                    "a_elo": ha.get("elo_rating"), "b_elo": hb.get("elo_rating"),
+                                    "a_status": ha.get("status"), "b_status": hb.get("status")})
+    ca, cb = sa.get("consensus"), sb.get("consensus")
+    consensus_change = {"a": (ca or {}).get("outcome") if ca else None, "b": (cb or {}).get("outcome") if cb else None,
+                        "a_detail": (ca or {}).get("detail") if ca else None, "b_detail": (cb or {}).get("detail") if cb else None}
+    # new findings: hypotheses added + workspace-level? Use added titles
+    new_findings = [(h.get("title") or h.get("description") or "") for h in added]
+    unresolved = {"a": sa.get("unresolved", []), "b": sb.get("unresolved", [])}
+    return {"a": a, "b": b, "summary_a": sa, "summary_b": sb,
+            "hypothesis_changes": {"added": added, "removed": removed},
+            "ranking_changes": ranking_changes,
+            "consensus_change": consensus_change,
+            "new_findings": new_findings,
+            "unresolved": unresolved}

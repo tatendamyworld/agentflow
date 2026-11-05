@@ -52,11 +52,51 @@ def build_prompt_preview(agent_id: str, run, executions, raw_data="", top_hypoth
     template = load_template(agent_id)
     deps = dependencies_for(agent_id)
     placeholders = sorted(set(re.findall(r"\{\{(\w+)\}\}", template)))
-    # consensus fetch with project dir
+    # consensus fetch with inheritance: previous iteration fallback + winning hypothesis
+    consensus_row = None
+    prev_top = ""
     try:
-        consensus_row = dbmod.get_consensus(run["id"] if isinstance(run, dict) else run.id, project=project) if isinstance(run, dict) else None
+        rid = run["id"] if isinstance(run, dict) else run.id
+        consensus_row = dbmod.get_consensus(rid, project=project)
+        cur_it = run["current_iteration"] if isinstance(run, dict) else getattr(run, "current_iteration", 1)
+        if consensus_row is None and cur_it and int(cur_it) > 1:
+            consensus_row = dbmod.get_consensus(rid, iteration=int(cur_it) - 1, project=project)
+        if consensus_row is not None:
+            # prev top hypothesis inheritance
+            try:
+                from agentflow import backend_models as _bm
+                prev_it = int(cur_it) - 1 if cur_it else 1
+                prev_hyps = _bm.list_hypotheses(project, rid, iteration=prev_it)
+                for h in prev_hyps:
+                    if (h.get("status") or "") == "SELECTED":
+                        prev_top = h.get("title") or h.get("description") or ""
+                        break
+                if not prev_top:
+                    prev_exes = dbmod.get_executions(rid, iteration=prev_it, project=project)
+                    for e in prev_exes:
+                        if e.get("top_hypothesis"):
+                            prev_top = e["top_hypothesis"]
+            except Exception:
+                prev_top = ""
     except Exception:
         consensus_row = None
+    # If still raw and we have prev top, enrich for supervisor prompt only
+    if consensus_row is not None and prev_top and agent_id == "supervisor":
+        try:
+            import json as _json
+            extra = {"previous_consensus_row": dict(consensus_row), "previous_winning_hypothesis": prev_top, "previous_iteration": int(cur_it) - 1 if cur_it else None}
+            if isinstance(consensus_row, dict) and consensus_row.get("detail"):
+                try:
+                    det = _json.loads(consensus_row["detail"])
+                    if isinstance(det, dict):
+                        extra.update(det)
+                except Exception:
+                    pass
+            consensus_row = extra
+        except Exception:
+            pass
+    if prev_top and not top_hypothesis and agent_id != "supervisor":
+        top_hypothesis = prev_top
     ctx = build_context(run, executions, consensus=consensus_row,
                         top_hypothesis=top_hypothesis or "", raw_data=raw_data or "",
                         iteration=(run["current_iteration"] if isinstance(run, dict) else getattr(run, "current_iteration", 1)))

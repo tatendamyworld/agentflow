@@ -667,7 +667,78 @@
         .catch(function (err) { $("finch-msg").textContent = "Finch failed: " + err.message; });
     });
 
-    ctx.renderDashboard = function () { renderOverview(); renderHypotheses(); renderHypCompare(); renderRanking(); renderCrowFalcon(); renderFinch(); renderFinchHistory(); renderHistory(); };
+    function renderIterations() {
+      var sel = $("iteration-select");
+      if (!sel) return;
+      var run = ctx.state.run || {};
+      var cur = run.current_iteration || run.iteration || 1;
+      var list = ctx.state.iterations || [];
+      sel.innerHTML = list.length ? list.map(function (it) {
+        var n = it.iteration != null ? it.iteration : it;
+        return '<option value="' + esc(n) + '"' + (Number(n) === Number(cur) ? " selected" : "") + ">Iter " + esc(n) + (it.completed != null ? " (" + esc(it.completed) + "/9)" : "") + "</option>";
+      }).join("") : '<option value="' + esc(cur) + '">Iter ' + esc(cur) + "</option>";
+      sel.value = String(cur);
+      var a = $("iter-a"), b = $("iter-b");
+      if (a && b) {
+        var vals = list.length ? list.map(function (it) { return it.iteration != null ? it.iteration : it; }) : [cur];
+        a.innerHTML = vals.map(function (n) { return '<option value="' + esc(n) + '">Iter ' + esc(n) + "</option>"; }).join("");
+        b.innerHTML = a.innerHTML;
+        if (vals.length >= 2) { a.value = String(vals[0]); b.value = String(vals[vals.length - 1]); }
+        else { a.value = String(cur); b.value = String(cur); }
+      }
+      if ($("#loop-btn")) $("#loop-btn").disabled = !ctx.state.run || !(ctx.state.run.current_iteration >= 1 && (ctx.state.consensus && ctx.state.consensus.outcome));
+    }
+    var iterSel = $("iteration-select");
+    if (iterSel) iterSel.addEventListener("change", function () {
+      var it = Number(iterSel.value); if (!it) return;
+      ctx.api.switchIteration(ctx.state.runId, it).then(function () { ctx.refresh(); })
+        .catch(function (err) { alert("Switch failed: " + err.message); });
+    });
+    var loopBtn = $("loop-btn");
+    if (loopBtn) loopBtn.addEventListener("click", function () {
+      if (!ctx.state.runId) return;
+      ctx.api.loop(ctx.state.runId).then(function (d) {
+        var sup = d.supervisor_prompt || "";
+        ctx.state.selectedAgent = "supervisor";
+        var msg = "Iteration " + d.current_iteration + " started — supervisor prompt generated (inherits goal + previous consensus/top).";
+        var el = $("iter-compare-msg"); if (el) el.textContent = msg;
+        ctx.refresh();
+      }).catch(function (err) {
+        var el = $("iter-compare-msg"); if (el) el.textContent = "Next iteration failed: " + err.message;
+      });
+    });
+    var iterCmp = $("iter-compare-btn");
+    if (iterCmp) iterCmp.addEventListener("click", function () {
+      var a = Number($("iter-a").value), b = Number($("iter-b").value);
+      if (!a || !b) return;
+      var el = $("iter-compare-msg"); el.textContent = "Comparing…";
+      ctx.api.compareIterations(ctx.state.runId, a, b).then(function (d) {
+        var box = $("iter-compare"); box.hidden = false;
+        function listOrDash(arr) { return (arr && arr.length) ? esc(JSON.stringify(arr, null, 2)).slice(0, 400) : "—"; }
+        var hc = d.hypothesis_changes || {};
+        box.innerHTML = "<h3>Iteration " + esc(d.a) + " vs " + esc(d.b) + "</h3>" +
+          "<p><strong>Hypothesis changes:</strong> +" + esc((hc.added || []).length) + " / −" + esc((hc.removed || []).length) + "</p>" +
+          "<pre class='output-pre'>" + esc(JSON.stringify(hc, null, 2)) + "</pre>" +
+          "<p><strong>Ranking changes:</strong> " + esc((d.ranking_changes || []).length) + " entries</p><pre class='output-pre'>" + esc(JSON.stringify(d.ranking_changes || [], null, 2)) + "</pre>" +
+          "<p><strong>Consensus:</strong> " + esc((d.consensus_change || {}).a || "—") + " → " + esc((d.consensus_change || {}).b || "—") + "</p>" +
+          "<p><strong>New findings:</strong> " + esc((d.new_findings || []).join("; ") || "—") + "</p>" +
+          "<p><strong>Unresolved (A):</strong> " + esc((((d.unresolved || {}).a || [])).join("; ") || "—") + "</p>" +
+          "<p><strong>Unresolved (B):</strong> " + esc((((d.unresolved || {}).b || [])).join("; ") || "—") + "</p>";
+        el.textContent = "Compared " + d.a + " vs " + d.b + ".";
+      }).catch(function (err) { el.textContent = "Compare failed: " + err.message; });
+    });
+    var pollOrig = ctx.refresh;
+    /* poll iterations list alongside dashboard */
+    (function () {
+      var origRender = ctx.renderDashboard;
+      // renderIterations fetches list; call it after each dashboard render cheaply via interval guard:
+      ctx.renderDashboard = function () { origRender(); if (ctx.state.runId && ctx.api.listIterations) ctx.api.listIterations(ctx.state.runId).then(function (d) { ctx.state.iterations = d.iterations || []; renderIterations(); }).catch(function () {}); };
+    })();
+    ctx.renderDashboard = function () { renderOverview(); renderHypotheses(); renderHypCompare(); renderRanking(); renderCrowFalcon(); renderFinch(); renderFinchHistory(); renderHistory(); if (ctx.renderDashboard2) {} };
+    // Re-wrap: keep iteration sync + dashboard
+    var _base = ctx.renderDashboard;
+    ctx.renderDashboard = function () { _base(); if (ctx.state.runId && ctx.api.listIterations) ctx.api.listIterations(ctx.state.runId).then(function (d) { ctx.state.iterations = d.iterations || []; renderIterations(); }).catch(function () {}); };
+
   }
 
   window.AgentFlow = window.AgentFlow || {};

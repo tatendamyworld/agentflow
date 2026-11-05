@@ -179,8 +179,11 @@ class TestWeb(WebTestBase):
         self.assertEqual(r.get_json()["current_iteration"], 2)
         r = self.client.get(f"/api/runs/{rid}")
         self.assertEqual(len(r.get_json()["executions"]), 9)
-        self.assertTrue(all(e["status"] == "PENDING"
-                            for e in r.get_json()["executions"]))
+        # Phase 11: fresh supervisor prompt is WAITING_FOR_INPUT, none COMPLETED (not copied from iteration 1)
+        statuses = {e["agent"]: e["status"] for e in r.get_json()["executions"]}
+        self.assertTrue(not any(s == "COMPLETED" for s in statuses.values()))
+        self.assertEqual(statuses["supervisor"], "WAITING_FOR_INPUT")
+        self.assertTrue(all(statuses[a] == "PENDING" for a in ("generation","proximity","reflection","evolution","ranking","crow","falcon","finch")))
 
     def test_hypotheses_parse_manual_patch_ranking(self):
         rid = self.make_run()

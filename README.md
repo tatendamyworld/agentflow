@@ -194,3 +194,15 @@ Eight independent evaluations (manual paste, no auto-evaluation, `Key finding: Y
 - **Visual:** eight editable cards (textarea + vote/validation badges + timestamp + per-card save), vote chart (YES/NO/INCONCLUSIVE totals + % of 8), consensus banner (outcome + percentages), totals line, `GET /finch/history` evaluation history (snapshots + consensus rows). All derived from stored runs — no decoration without data.
 
 Tests: `tests/test_finch_lab.py` (8 tests). Full suite (`pytest tests/`): 94 passed.
+
+## PHASE 11 — Iteration Engine
+
+Multiple research iterations with full preservation:
+
+- **Start next:** `POST /loop` only after Finch consensus; creates fresh PENDING executions for `iteration N+1` (old rows untouched, statuses not copied), inherits original goal + previous consensus + winning hypothesis + unresolved findings, and auto-generates a fresh Supervisor prompt (PREVIOUS_CONSENSUS includes prior outcome + top).
+- **Independence:** each iteration owns 9 execution rows + hypotheses/finch/workspace notes keyed by iteration; history across iterations preserved (`GET /history`, `/agent/:agent/history`).
+- **Selector:** top-nav `<select id=iteration-select>` + `POST /iterations/switch` {iteration} (updates `runs.current_iteration`, all panels re-render for that iteration).
+- **Compare:** `GET /iterations/compare?a=&b=` — hypothesis added/removed, ranking changes (rank/ELO/status), consensus before/after, new findings (added titles), unresolved questions (Unknowns sections + “?” lines).
+- **Snapshots:** `GET /iterations` lists per-iteration completed count, consensus, top/count; `POST /loop` returns inheritance payload + supervisor prompt.
+
+Tests: `tests/test_iterations.py` (5 tests). Full suite (`pytest tests/`): 99 passed.

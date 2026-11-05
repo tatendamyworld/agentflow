@@ -31,6 +31,10 @@
 
     <div class="topnav-pills">
       <span id="nav-status" class="pill pill-status" title="Run status">—</span>
+      <label class="small muted">Iteration
+        <select id="iteration-select" aria-label="Iteration selector"></select>
+      </label>
+      <button type="button" id="loop-btn" class="btn btn-ghost btn-small" title="Start next iteration after Finch consensus">+ Next iteration</button>
       <span id="nav-iteration" class="pill pill-iter" title="Current iteration">Iter —</span>
       <span id="nav-api" class="pill pill-api" title="Backend API status">API …</span>
     </div>
@@ -281,6 +285,14 @@
         </div>
       </div>
       <div id="history-list" class="history-list"><p class="muted">No history loaded.</p></div>
+      <h3 class="insp-h">Compare iterations</h3>
+      <div class="panel-actions">
+        <label class="small muted">A <select id="iter-a" aria-label="Compare iteration A"></select></label>
+        <label class="small muted">B <select id="iter-b" aria-label="Compare iteration B"></select></label>
+        <button type="button" id="iter-compare-btn" class="btn btn-ghost btn-small">Compare iterations</button>
+        <span id="iter-compare-msg" class="muted small" role="status"></span>
+      </div>
+      <div id="iter-compare" class="history-compare" hidden></div>
       <div id="history-compare" class="history-compare" hidden></div>
     </section>
   </main>
