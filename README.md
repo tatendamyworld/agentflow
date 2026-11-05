@@ -249,3 +249,14 @@ Calm, professional refinements (no excessive glow, reduced-motion respected):
 - **Keyboard:** `1–9` agents, `/` search, `go/gn/gh/gf` jumps, `?` help, `Esc` close (`help-dialog`).
 
 Tests: `tests/test_ui_polish.py` (11 tests). Full suite (`pytest tests/`): 120 passed.
+
+## PHASE 15 — Testing and Validation
+
+Comprehensive validation (all temp DBs, never the repo DB):
+
+- **End-to-end lifecycle:** create → generate (real preceding output, out-of-order 409) → submit via inspector save → validate sections → ranking parse/ELO → Finch bulk + individual invalid/edit/recast → loop iterations preserving history → Markdown export raw completeness.
+- **CLI/DB synchronization:** CLI `new/paste/next/status` round-trip with dashboard `GET` both ways; web create mirrors `.current`; `save-top` ↔ SELECTED sync.
+- **Restart/recovery:** fresh app instance on same project dir sees CLI-written output + correct progress (no state fork).
+- **Bulk audit:** `tests/test_full_validation.py` (4 tests) + existing 120. Full suite: `venv/bin/python -m pytest tests/ -q` — **124 passed**.
+
+Run: `venv/bin/python -m pytest tests/ -q` from `agentflow/` (uses `venv/` Flask).
