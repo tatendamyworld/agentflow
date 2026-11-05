@@ -527,36 +527,84 @@
       });
     });
 
+    function finchMsg(text) { var m = $("finch-msg"); if (m) m.textContent = text || ""; }
     function renderFinch() {
       var runs = ctx.state.finchRuns || [], cons = consensusOf(ctx.state);
-      $("finch-count").textContent = runs.length ? (runs.length + "/8 runs") : "0/8 runs";
+      var totals = ctx.state.finchTotals || null;
+      var pcts = ctx.state.finchPct || null;
+      var validCount = ctx.state.finchValid != null ? ctx.state.finchValid : runs.filter(function (r) { return r.validation_status === "VALID" || ["YES","NO","INCONCLUSIVE"].indexOf(String(r.parsed_vote || r.vote || "").toUpperCase()) !== -1; }).length;
+      var validText = validCount + "/8 valid";
+      var submitted = runs.filter(function (r) { return r.raw_response || r.output; }).length;
+      $("finch-count").textContent = submitted + "/8 submitted · " + validText;
       var banner = $("consensus-banner");
       if (cons && cons.outcome) {
         var isCons = String(cons.outcome).toUpperCase().indexOf("CONSENSUS") === 0;
         banner.className = "consensus-banner " + (isCons ? "banner-consensus" : "banner-split");
-        banner.textContent = String(cons.outcome) + (cons.yes != null ? " — YES " + cons.yes + " · NO " + cons.no + " · INCONCLUSIVE " + cons.inconclusive : "");
+        var y = cons.yes != null ? cons.yes : 0, n = cons.no != null ? cons.no : 0, inc = cons.inconclusive != null ? cons.inconclusive : 0;
+        banner.textContent = String(cons.outcome) + " — YES " + y + " · NO " + n + " · INCONCLUSIVE " + inc + " (pcts " + (cons.percentages ? JSON.stringify(cons.percentages) : "—") + ")";
+      } else if (runs.length && validCount < 8) {
+        banner.className = "consensus-banner banner-neutral";
+        banner.textContent = "Incomplete — " + validCount + "/8 valid. Invalid runs are marked INVALID (not counted as votes). Edit them, then Recalculate — consensus finalizes only at 8/8 valid.";
       } else {
         banner.className = "consensus-banner banner-neutral";
-        banner.textContent = runs.length ? "Finch votes in — awaiting consensus." : "No consensus yet.";
+        banner.textContent = "No consensus yet — submit 8 evaluations (individual cards or bulk multiblock).";
       }
-      /* bar chart */
-      var counts = cons ? { YES: cons.yes || 0, NO: cons.no || 0, INCONCLUSIVE: cons.inconclusive || 0 }
-        : runs.reduce(function (a, r) { var v = String(r.parsed_vote || r.vote || "INVALID").toUpperCase(); if (a[v] != null) a[v]++; return a; }, { YES: 0, NO: 0, INCONCLUSIVE: 0 });
-      var total = Math.max((cons ? (cons.yes + cons.no + cons.inconclusive) : runs.length), 1);
+      var counts = totals ? { YES: totals.YES != null ? totals.YES : totals.yes, NO: totals.NO != null ? totals.NO : totals.no, INCONCLUSIVE: totals.INCONCLUSIVE != null ? totals.INCONCLUSIVE : totals.inconclusive }
+        : { YES: 0, NO: 0, INCONCLUSIVE: 0 };
+      var invalidN = totals ? (totals.INVALID != null ? totals.INVALID : totals.invalid) : 0;
+      var tots = $("finch-totals");
+      if (tots) tots.textContent = "YES " + counts.YES + " · NO " + counts.NO + " · INCONCLUSIVE " + counts.INCONCLUSIVE + " · INVALID " + invalidN + " — " + validText + (cons && cons.percentages ? " · " + JSON.stringify(cons.percentages) : "");
+      var total8 = 8;
       var order = [["YES", "fill-yes"], ["NO", "fill-no"], ["INCONCLUSIVE", "fill-inc"]];
       $("finch-chart").innerHTML = order.map(function (pair) {
-        var pct = Math.round(((counts[pair[0]] || 0) / total) * 100);
+        var pct = pcts ? (pcts[pair[0]] != null ? pcts[pair[0]] : Math.round((counts[pair[0]] || 0) / total8 * 100)) : Math.round((counts[pair[0]] || 0) / total8 * 100);
         return '<div class="chart-row"><span>' + pair[0] + '</span><div class="chart-track"><div class="chart-fill ' + pair[1] + '" style="width:' + pct + '%"></div></div><span>' + (counts[pair[0]] || 0) + " (" + pct + "%)</span></div>";
       }).join("");
-      /* 8 cards */
       var cards = [];
-      for (var i = 0; i < 8; i++) {
-        var r = runs[i] || {};
-        var vote = String(r.parsed_vote || r.vote || (r.raw_response ? "—" : "—")).toUpperCase();
-        var text = r.raw_response || r.output || r.text || "Pending…";
-        cards.push('<article class="finch-card"><div class="finch-card-head"><strong>Finch Run ' + (i + 1) + '</strong><span class="vote-' + vote + '">' + vote + "</span></div><p>" + esc(text) + "</p></article>");
+      for (var i = 1; i <= 8; i++) {
+        var r = (Array.isArray(runs) ? (runs.filter(function (x) { return (x.run_index || x.run_number) === i; })[0] || (runs[i - 1] && (runs[i - 1].run_index == null) ? runs[i - 1] : null)) : null) || {};
+        var vote = String(r.parsed_vote || r.vote || "INVALID").toUpperCase();
+        if (!r.raw_response && !r.output) vote = "EMPTY";
+        var vs = r.validation_status || (vote === "EMPTY" ? "EMPTY" : (["YES","NO","INCONCLUSIVE"].indexOf(vote) !== -1 ? "VALID" : "INVALID"));
+        var text = r.raw_response || r.output || r.text || "";
+        var ts = r.updated_at || r.created_at || "—";
+        cards.push('<article class="finch-card"><div class="finch-card-head"><strong>Finch Run ' + i + '</strong><span class="vote-' + vote + '">' + vote + '</span></div>' +
+          '<p class="muted small">Validation: <span class="' + (vs === "VALID" ? "vote-YES" : "vote-INVALID") + '">' + vs + "</span> · " + esc(ts) + '</p>' +
+          '<textarea data-finch-run="' + i + '" rows="3" placeholder="Key finding: YES|NO|INCONCLUSIVE\nAnalysis…">' + esc(text) + '</textarea>' +
+          '<div class="btn-row"><button type="button" class="btn btn-ghost btn-small" data-finch-save="' + i + '">Save run ' + i + '</button></div></article>');
       }
       $("finch-cards").innerHTML = cards.join("");
+    }
+    var finchCards = $("finch-cards");
+    if (finchCards) finchCards.addEventListener("click", function (ev) {
+      var b = ev.target.closest("button[data-finch-save]"); if (!b) return;
+      var n = b.getAttribute("data-finch-save");
+      var ta = document.querySelector('textarea[data-finch-run="' + n + '"]');
+      var text = ta ? ta.value.trim() : "";
+      if (!text) { finchMsg("Run " + n + " is empty."); return; }
+      finchMsg("Saving run " + n + "…");
+      ctx.api.saveFinchRun(ctx.state.runId, n, text).then(function (d) {
+        finchMsg("Run " + n + " saved (" + (d.run ? d.run.validation_status : "") + "). " + (d.finalized ? d.consensus.outcome : "Consensus not final until 8/8 valid."));
+        ctx.refresh();
+      }).catch(function (err) { finchMsg("Save run " + n + " failed: " + err.message); });
+    });
+    var recalcBtn = $("finch-recalc");
+    if (recalcBtn) recalcBtn.addEventListener("click", function () {
+      finchMsg("Recalculating…");
+      ctx.api.recalcFinch(ctx.state.runId).then(function (d) {
+        finchMsg(d.finalized ? ("Finalized: " + d.outcome) : ("Not final — " + d.valid_count + "/8 valid. Edit INVALID runs first."));
+        ctx.refresh();
+      }).catch(function (err) { finchMsg("Recalc failed: " + err.message); });
+    });
+    /* Evaluation history is rendered inside renderFinch path via refresh; explicit fetch: */
+    function renderFinchHistory() {
+      var el = $("finch-history"); if (!el || !ctx.state.runId) return;
+      ctx.api.finchHistory(ctx.state.runId).then(function (d) {
+        var items = [];
+        (d.history || []).forEach(function (h) { items.push("Snapshot " + h.created_at + " · " + Math.round((h.votes_json ? 1 : 0)) + " votes archived"); });
+        (d.consensus_history || []).forEach(function (c) { items.push("Consensus " + c.created_at + " → " + c.outcome); });
+        el.innerHTML = items.length ? items.map(function (t) { return "<li>" + esc(t) + "</li>"; }).join("") : '<li class="muted">No history yet.</li>';
+      }).catch(function () { /* dashboard poll will retry */ });
     }
 
     /** ---------- history + compare ---------- */
@@ -619,7 +667,7 @@
         .catch(function (err) { $("finch-msg").textContent = "Finch failed: " + err.message; });
     });
 
-    ctx.renderDashboard = function () { renderOverview(); renderHypotheses(); renderHypCompare(); renderRanking(); renderCrowFalcon(); renderFinch(); renderHistory(); };
+    ctx.renderDashboard = function () { renderOverview(); renderHypotheses(); renderHypCompare(); renderRanking(); renderCrowFalcon(); renderFinch(); renderFinchHistory(); renderHistory(); };
   }
 
   window.AgentFlow = window.AgentFlow || {};

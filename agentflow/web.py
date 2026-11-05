@@ -975,17 +975,76 @@ def create_app(project="."):
         if failure:
             return failure
         rows = db.get_finch_runs(run_id, project=project)
+        lab = db.get_finch_lab(run_id, project=project)
         enriched = []
         for r in rows:
             row = dict(r)
+            row["run_number"] = r.get("run_index")
             row["vote"] = r.get("parsed_vote")
             row["output"] = r.get("raw_response")
             row["text"] = r.get("raw_response")
+            row["validation_status"] = r.get("validation_status") or ("VALID" if r.get("parsed_vote") in ("YES","NO","INCONCLUSIVE") else "INVALID")
             enriched.append(row)
+        cons = consensus_for(run)
+        finalized = bool(cons and cons.get("outcome"))
+        outcome = (cons or {}).get("outcome") or lab.get("outcome") or ("INCOMPLETE — " + str(lab.get("valid_count", 0)) + "/8 valid" if not lab.get("complete") else lab.get("outcome"))
         return jsonify(finch_runs=enriched, finchRuns=enriched, finch=enriched,
+                       runs=lab["runs"],
                        responses=[r.get("raw_response") for r in rows],
                        votes=[r.get("parsed_vote") for r in rows],
-                       consensus=consensus_for(run), run_id=run_id)
+                       totals=lab["totals"], percentages=lab["percentages"],
+                       valid_count=lab["valid_count"], invalid_count=lab["invalid_count"], complete=lab["complete"],
+                       finalized=finalized, outcome=outcome,
+                       consensus=cons, run_id=run_id)
+
+    @app.route("/api/runs/<run_id>/finch/run/<int:run_index>", methods=["PUT", "PATCH", "POST"])
+    def put_finch_run(run_id, run_index):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        if run_index < 1 or run_index > 8:
+            return err(f"run_index must be 1-8, got {run_index}", 404)
+        data = body()
+        if data is None:
+            return err("request body must be a JSON object")
+        raw = data.get("response", data.get("output", data.get("text", data.get("raw_response"))))
+        if raw is None or not isinstance(raw, str) or not raw.strip():
+            return err("response must be a non-empty string")
+        if len(raw) > 20000:
+            return err("response exceeds 20000 characters")
+        try:
+            saved = db.save_finch_run(run_id, run_index, raw, project)
+        except ValueError as exc:
+            return err(str(exc), 400)
+        lab, result = db.recalc_consensus(run_id, project)
+        payload_run = next((r for r in lab["runs"] if r["run_index"] == run_index), None)
+        cons = consensus_for(db.get_run(run_id, project))
+        return jsonify(run=payload_run, evaluation=payload_run, lab={k: lab[k] for k in ("totals", "percentages", "valid_count", "invalid_count", "complete", "outcome")},
+                       finalized=bool(result), consensus=cons, run_id=run_id)
+
+    @app.route("/api/runs/<run_id>/finch/recalc", methods=["POST"])
+    def recalc_finch(run_id):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        lab, result = db.recalc_consensus(run_id, project)
+        if result is None:
+            cons = consensus_for(run)
+            return jsonify(run_id=run_id, finalized=False, complete=False, valid_count=lab["valid_count"], invalid_count=lab["invalid_count"],
+                           totals=lab["totals"], percentages=lab["percentages"],
+                           outcome="INCOMPLETE — " + str(lab["valid_count"]) + "/8 valid (edit invalid runs, then recalculate)",
+                           consensus=cons, lab=lab)
+        return jsonify(run_id=run_id, finalized=True, complete=True, outcome=result["outcome"],
+                       totals=lab["totals"], percentages=lab["percentages"],
+                       consensus=consensus_for(db.get_run(run_id, project)), lab=lab, result=result)
+
+    @app.route("/api/runs/<run_id>/finch/history", methods=["GET"])
+    def finch_history(run_id):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        hist = db.get_finch_history(run_id, project=project)
+        return jsonify(run_id=run_id, **hist)
 
     # -- hypotheses / ranking -------------------------------------------------
 

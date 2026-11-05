@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS executions (
 CREATE TABLE IF NOT EXISTS finch_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, iteration INTEGER NOT NULL,
   run_index INTEGER NOT NULL, raw_response TEXT, parsed_vote TEXT, created_at TEXT,
+  validation_status TEXT, updated_at TEXT,
   FOREIGN KEY (run_id) REFERENCES runs(id)
 );
 CREATE TABLE IF NOT EXISTS consensus (
@@ -58,6 +59,18 @@ def _connect(project="."):
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys=ON")
     con.executescript(SCHEMA)
+    # migration: lab columns on older DBs (idempotent)
+    try:
+        cols = [r[1] for r in con.execute("PRAGMA table_info(finch_runs)").fetchall()]
+        if "validation_status" not in cols:
+            con.execute("ALTER TABLE finch_runs ADD COLUMN validation_status TEXT")
+        if "updated_at" not in cols:
+            con.execute("ALTER TABLE finch_runs ADD COLUMN updated_at TEXT")
+            con.execute("UPDATE finch_runs SET updated_at=created_at WHERE updated_at IS NULL")
+        con.execute("UPDATE finch_runs SET validation_status=CASE WHEN parsed_vote IN ('YES','NO','INCONCLUSIVE') THEN 'VALID' WHEN parsed_vote='INVALID' THEN 'INVALID' ELSE validation_status END WHERE validation_status IS NULL")
+        con.commit()
+    except Exception:
+        pass
     return con
 
 def _now():
@@ -206,8 +219,9 @@ def save_finch_runs(rid, responses, project="."):
     con.execute("DELETE FROM finch_runs WHERE run_id=? AND iteration=?", (rid, run["current_iteration"]))
     for i, r in enumerate(responses, 1):
         vote = parse_finch_vote(r)
-        con.execute("INSERT INTO finch_runs(run_id,iteration,run_index,raw_response,parsed_vote,created_at) VALUES(?,?,?,?,?,?)",
-                    (rid, run["current_iteration"], i, r, vote, _now()))
+        vs = "VALID" if vote in ("YES", "NO", "INCONCLUSIVE") else "INVALID"
+        con.execute("INSERT INTO finch_runs(run_id,iteration,run_index,raw_response,parsed_vote,created_at,validation_status,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                    (rid, run["current_iteration"], i, r, vote, _now(), vs, _now()))
     con.commit(); con.close()
 
 def get_finch_runs(rid, iteration=None, project="."):
@@ -217,6 +231,104 @@ def get_finch_runs(rid, iteration=None, project="."):
         iteration = it["current_iteration"] if it else 1
     rows = con.execute("SELECT * FROM finch_runs WHERE run_id=? AND iteration=? ORDER BY run_index", (rid, iteration)).fetchall()
     con.close(); return [dict(r) for r in rows]
+
+def save_finch_run(rid, run_index, response, project="."):
+    """Single-evaluation upsert (1..8). Stores INVALID rows too (not as votes)
+    so they stay editable; consensus finalization is separate."""
+    run = get_run(rid, project); assert run
+    if not isinstance(run_index, int) or isinstance(run_index, bool) or not (1 <= run_index <= 8):
+        raise ValueError("run_index must be 1-8")
+    if response is None or not str(response).strip():
+        raise ValueError(f"Finch Run {run_index} response must not be empty")
+    if len(str(response)) > 20000:
+        raise ValueError(f"Finch Run {run_index} exceeds 20000 characters")
+    from agentflow.consensus import parse_finch_vote
+    vote = parse_finch_vote(response)
+    vs = "VALID" if vote in ("YES", "NO", "INCONCLUSIVE") else "INVALID"
+    con = _connect(project)
+    old = con.execute("SELECT * FROM finch_runs WHERE run_id=? AND iteration=? AND run_index=?",
+                      (rid, run["current_iteration"], run_index)).fetchone()
+    if old is not None:
+        import json as _json
+        all_rows = con.execute("SELECT * FROM finch_runs WHERE run_id=? AND iteration=?", (rid, run["current_iteration"])).fetchall()
+        con.execute("INSERT INTO finch_history(run_id,iteration,total_runs,votes_json,outcome,created_at) VALUES(?,?,?,?,?,?)",
+                    (rid, run["current_iteration"], len(all_rows),
+                     _json.dumps({"edited_run": run_index, "before": [old["raw_response"]], "votes_before": [old["parsed_vote"]]}),
+                     "edited", _now()))
+        con.execute("UPDATE finch_runs SET raw_response=?, parsed_vote=?, validation_status=?, updated_at=? WHERE id=?",
+                    (response, vote, vs, _now(), old["id"]))
+    else:
+        con.execute("INSERT INTO finch_runs(run_id,iteration,run_index,raw_response,parsed_vote,created_at,validation_status,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                    (rid, run["current_iteration"], run_index, response, vote, _now(), vs, _now()))
+    con.commit(); con.close()
+    rows = get_finch_runs(rid, project=project)
+    return next((r for r in rows if r["run_index"] == run_index), None)
+
+
+def get_finch_lab(rid, project="."):
+    """Laboratory snapshot: 8 slots, totals, percentages, completeness."""
+    rows = get_finch_runs(rid, project=project)
+    by_index = {r["run_index"]: r for r in rows}
+    runs = []
+    for i in range(1, 9):
+        r = by_index.get(i)
+        vote = (r or {}).get("parsed_vote")
+        vs = (r or {}).get("validation_status") or ("VALID" if vote in ("YES", "NO", "INCONCLUSIVE") else ("INVALID" if vote == "INVALID" else "EMPTY"))
+        runs.append({"run_index": i, "run_number": i, "raw_response": (r or {}).get("raw_response"),
+                     "output": (r or {}).get("raw_response"), "parsed_vote": vote, "vote": vote,
+                     "validation_status": vs, "created_at": (r or {}).get("created_at"), "updated_at": (r or {}).get("updated_at")})
+    valid = [r for r in runs if r["validation_status"] == "VALID"]
+    yes = sum(1 for r in runs if r["parsed_vote"] == "YES")
+    no = sum(1 for r in runs if r["parsed_vote"] == "NO")
+    inc = sum(1 for r in runs if r["parsed_vote"] == "INCONCLUSIVE")
+    inv = sum(1 for r in runs if r["validation_status"] == "INVALID")
+    totals = {"YES": yes, "NO": no, "INCONCLUSIVE": inc, "INVALID": inv,
+              "yes": yes, "no": no, "inconclusive": inc, "invalid": inv}
+    pct = {k: round(totals[k] / 8 * 100, 1) for k in ("YES", "NO", "INCONCLUSIVE", "INVALID")}
+    valid_count = len(valid)
+    complete = valid_count == 8
+    outcome = None
+    if complete:
+        from agentflow.consensus import evaluate_consensus
+        outcome = evaluate_consensus([r["parsed_vote"] for r in runs])["outcome"]
+    return {"runs": runs, "totals": totals, "percentages": pct, "valid_count": valid_count,
+            "invalid_count": inv, "complete": complete, "outcome": outcome,
+            "finalized": False}
+
+
+def recalc_consensus(rid, project="."):
+    """Finalize only when 8 VALID rows exist; else returns incomplete (no save)."""
+    lab = get_finch_lab(rid, project=project)
+    if not lab["complete"]:
+        return lab, None
+    from agentflow.consensus import evaluate_consensus
+    votes = [r["parsed_vote"] for r in lab["runs"]]
+    result = evaluate_consensus(votes)
+    # mark finch execution completed before consensus (existing parity)
+    try:
+        exe = get_execution(rid, "finch", project=project)
+        if exe is not None and exe["status"] != "COMPLETED":
+            responses = [r["raw_response"] for r in lab["runs"]]
+            save_output(rid, "finch", "\n---\n".join(str(x) for x in responses), project)
+    except Exception:
+        pass
+    save_consensus(rid, {"yes": result["yes"], "no": result["no"], "inconclusive": result["inconclusive"],
+                         "invalid": result["invalid"], "outcome": result["outcome"],
+                         "detail": json.dumps(result)}, project)
+    lab["finalized"] = True
+    lab["outcome"] = result["outcome"]
+    return lab, result
+
+
+def get_finch_history(rid, project="."):
+    con = _connect(project)
+    try:
+        rows = con.execute("SELECT * FROM finch_history WHERE run_id=? ORDER BY id", (rid,)).fetchall()
+        cons = con.execute("SELECT * FROM consensus WHERE run_id=? ORDER BY id", (rid,)).fetchall()
+    finally:
+        con.close()
+    return {"history": [dict(r) for r in rows], "consensus_history": [dict(r) for r in cons]}
+
 
 def save_consensus(rid, result, project="."):
     run = get_run(rid, project); assert run

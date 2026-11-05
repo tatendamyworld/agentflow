@@ -182,3 +182,15 @@ Dedicated investigation interfaces (manual-paste only, no internet browsing):
 - **Templates** (`prompts/crow.txt`, `falcon.txt`) updated to request the exact section headings.
 
 Tests: `tests/test_workspaces.py` (7 tests). Full suite: 86 passed.
+
+## PHASE 10 — Finch Consensus Laboratory
+
+Eight independent evaluations (manual paste, no auto-evaluation, `Key finding: YES|NO|INCONCLUSIVE` required):
+
+- **Per-evaluation store:** `finch_runs` (run_number, raw_response, parsed_vote, validation_status VALID/INVALID, created_at/updated_at timestamps).
+- **Eight individual submits:** `PUT /finch/run/<1..8>` {response} per card; **bulk multiblock** `POST /finch` {responses|[multiblock]} (atomic, strict 400 on invalid for CLI parity) — both write same tables.
+- **Edit invalid:** `PUT /finch/run/<n>` with new text re-parses; INVALID rows stored first, never counted as votes.
+- **Recalc:** `POST /finch/recalc` finalizes only at 8/8 VALID (outcome via `>=4` rule; else `SPLIT` pending banner), returns `INCOMPLETE x/8 valid` without saving consensus otherwise. Individual saves auto-recalc when 8/8 valid.
+- **Visual:** eight editable cards (textarea + vote/validation badges + timestamp + per-card save), vote chart (YES/NO/INCONCLUSIVE totals + % of 8), consensus banner (outcome + percentages), totals line, `GET /finch/history` evaluation history (snapshots + consensus rows). All derived from stored runs — no decoration without data.
+
+Tests: `tests/test_finch_lab.py` (8 tests). Full suite (`pytest tests/`): 94 passed.

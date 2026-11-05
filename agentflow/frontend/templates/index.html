@@ -244,16 +244,20 @@
         <span id="finch-count" class="muted small"></span>
       </div>
       <div id="consensus-banner" class="consensus-banner banner-neutral" role="status">No consensus yet.</div>
+      <p id="finch-totals" class="muted small">YES 0 · NO 0 · INCONCLUSIVE 0 · INVALID 0 — 0/8 valid</p>
       <div id="finch-chart" class="finch-chart" aria-label="Finch vote distribution"></div>
       <div id="finch-cards" class="finch-cards"></div>
       <form id="finch-form" class="finch-form">
-        <label for="finch-responses">Submit 8 Finch responses (one per run, each with “Key finding: YES|NO|INCONCLUSIVE”)</label>
+        <label for="finch-responses">Multiblock: 8 responses separated by a line containing only --- (each with “Key finding: YES|NO|INCONCLUSIVE”)</label>
         <textarea id="finch-responses" rows="8" placeholder="Separate runs with a line containing only ---"></textarea>
         <div class="btn-row">
-          <button type="submit" class="btn btn-primary">Run Finch consensus</button>
+          <button type="submit" class="btn btn-primary">Run Finch consensus (bulk)</button>
+          <button type="button" id="finch-recalc" class="btn btn-ghost">Recalculate consensus</button>
           <span id="finch-msg" class="muted small" role="status"></span>
         </div>
       </form>
+      <h3 class="insp-h">Evaluation history</h3>
+      <ol id="finch-history" class="timeline"><li class="muted">No history yet.</li></ol>
     </section>
 
     <!-- Timeline -->

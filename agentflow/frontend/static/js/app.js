@@ -79,6 +79,9 @@
     runHistory: function (id) { return req("/api/runs/" + encodeURIComponent(id) + "/history"); },
     saveTop: function (id, text) { return req("/api/runs/" + encodeURIComponent(id) + "/save-top", { method: "POST", body: { top_hypothesis: text } }).catch(function () { return req("/api/runs/" + encodeURIComponent(id) + "/save", { method: "POST", body: { agent: "ranking", top_hypothesis: text, output: text } }); }); },
     finch: function (id, responses) { return req("/api/runs/" + encodeURIComponent(id) + "/finch", { method: "POST", body: { responses: responses } }); },
+    saveFinchRun: function (id, n, text) { return req("/api/runs/" + encodeURIComponent(id) + "/finch/run/" + encodeURIComponent(n), { method: "PUT", body: { response: text } }); },
+    recalcFinch: function (id) { return req("/api/runs/" + encodeURIComponent(id) + "/finch/recalc", { method: "POST", body: {} }); },
+    finchHistory: function (id) { return req("/api/runs/" + encodeURIComponent(id) + "/finch/history"); },
     reorder: function (id, order) { return req("/api/runs/" + encodeURIComponent(id) + "/ranking/reorder", { method: "POST", body: { order: order } }); },
     rankingHistory: function (id) { return req("/api/runs/" + encodeURIComponent(id) + "/ranking/history"); },
     getWorkspace: function (id, ws) { return req("/api/runs/" + encodeURIComponent(id) + "/workspace/" + encodeURIComponent(ws)); },
@@ -115,6 +118,10 @@
     if (exes.length) state.executions = exes;
     var fr = pickFinch(d);
     if (fr.length) state.finchRuns = fr;
+    if (d && d.runs) state.finchRuns = d.runs;
+    if (d && d.totals) state.finchTotals = d.totals;
+    if (d && d.percentages) state.finchPct = d.percentages;
+    if (d && d.valid_count != null) state.finchValid = d.valid_count;
     var cons = pickConsensus(d);
     if (cons) state.consensus = cons;
     if (d && Array.isArray(d.hypotheses)) state.hypotheses = d.hypotheses;
