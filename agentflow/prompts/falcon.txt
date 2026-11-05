@@ -4,11 +4,18 @@ GOAL: {{GOAL}}
 CROW OUTPUT: {{CROW_OUTPUT}}
 TOP HYPOTHESIS: {{TOP_HYPOTHESIS}}
 
-Task: Deep-dive one component (data flow, edge cases, tests).
-Output format:
-## Component
+Task: Deep-dive one component (data flow, edge cases, tests). Do not browse the internet.
+
+Output format (use these headings exactly so sections can be extracted):
+## Component being investigated
 ...
-## Findings
+## Technical architecture
+...
+## Detailed analysis
 - ...
-## Recommendations
-...
+## Implementation requirements
+- ...
+## Testing strategy
+- ...
+## Limitations
+- ...

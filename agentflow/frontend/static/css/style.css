@@ -216,3 +216,9 @@ dialog label{display:block;margin:.5rem 0 .25rem;color:var(--muted);font-size:.8
 .rank-matches{font-size:.85rem;display:flex;flex-direction:column;gap:.3rem;margin-bottom:.9rem}
 .rank-matches li{list-style:none}
 .rank-correct-input{width:70px;background:#0a1220;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:.25rem}
+
+/* PHASE 9 — workspaces */
+.ws-sections{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:.7rem;margin:.6rem 0}
+.ws-field{display:flex;flex-direction:column;gap:.3rem}
+.ws-field label{font-size:.8rem;color:var(--muted)}
+.ws-field textarea{width:100%;background:#0a1220;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:.5rem;min-height:72px;font-size:.85rem}

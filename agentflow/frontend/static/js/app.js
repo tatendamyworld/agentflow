@@ -7,7 +7,7 @@
 
   var state = {
     runId: null, run: null, executions: [], finchRuns: [], consensus: null,
-    hypotheses: [], ranking: [], rankingDashboard: null, eloVisual: [], rankingChanges: [], comparative: [], winning: null, rankingHistory: null, runs: [], selectedAgent: "supervisor", online: false
+    hypotheses: [], ranking: [], rankingDashboard: null, eloVisual: [], rankingChanges: [], comparative: [], winning: null, rankingHistory: null, crowWs: null, falconWs: null, runs: [], selectedAgent: "supervisor", online: false
   };
 
   /* ---------- fetch helpers ---------- */
@@ -81,6 +81,10 @@
     finch: function (id, responses) { return req("/api/runs/" + encodeURIComponent(id) + "/finch", { method: "POST", body: { responses: responses } }); },
     reorder: function (id, order) { return req("/api/runs/" + encodeURIComponent(id) + "/ranking/reorder", { method: "POST", body: { order: order } }); },
     rankingHistory: function (id) { return req("/api/runs/" + encodeURIComponent(id) + "/ranking/history"); },
+    getWorkspace: function (id, ws) { return req("/api/runs/" + encodeURIComponent(id) + "/workspace/" + encodeURIComponent(ws)); },
+    parseWorkspace: function (id, ws, output) { return req("/api/runs/" + encodeURIComponent(id) + "/workspace/" + encodeURIComponent(ws) + "/parse", { method: "POST", body: { output: output || "" } }); },
+    patchWorkspace: function (id, ws, sections) { return req("/api/runs/" + encodeURIComponent(id) + "/workspace/" + encodeURIComponent(ws), { method: "PATCH", body: { sections: sections } }); },
+    generateWorkspace: function (id, ws) { return req("/api/runs/" + encodeURIComponent(id) + "/workspace/" + encodeURIComponent(ws) + "/generate", { method: "POST", body: {} }); },
     createHyp: function (id, payload) { return req("/api/runs/" + encodeURIComponent(id) + "/hypotheses", { method: "POST", body: payload }); },
     updateHyp: function (id, hypId, payload) { return req("/api/runs/" + encodeURIComponent(id) + "/hypotheses/" + encodeURIComponent(hypId), { method: "PATCH", body: payload }); },
     importHyps: function (id, payload) { return req("/api/runs/" + encodeURIComponent(id) + "/hypotheses/import", { method: "POST", body: payload || {} }); },
@@ -129,8 +133,12 @@
   function loadOptional(id) {
     return Promise.all([
       opt("/api/runs/" + encodeURIComponent(id) + "/hypotheses"),
-      opt("/api/runs/" + encodeURIComponent(id) + "/ranking")
-    ]).then(function (pair) {
+      opt("/api/runs/" + encodeURIComponent(id) + "/ranking"),
+      opt("/api/runs/" + encodeURIComponent(id) + "/workspace/crow"),
+      opt("/api/runs/" + encodeURIComponent(id) + "/workspace/falcon")
+    ]).then(function (arr) { var pair = [arr[0], arr[1]];
+      if (arr[2]) state.crowWs = arr[2];
+      if (arr[3]) state.falconWs = arr[3];
       if (pair[0]) state.hypotheses = Array.isArray(pair[0].hypotheses) ? pair[0].hypotheses : pair[0];
       if (pair[1]) { state.ranking = Array.isArray(pair[1].ranking) ? pair[1].ranking : pair[1];
         state.rankingDashboard = pair[1];

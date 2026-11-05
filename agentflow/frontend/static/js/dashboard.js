@@ -443,13 +443,89 @@
         .catch(function (err) { rankMsg("Reorder failed: " + err.message); });
     });
 
-    /** ---------- crow / falcon + finch ---------- */
+    /** ---------- crow / falcon workspaces (PHASE 9) ---------- */
+    var WS_FIELDS = {
+      crow: [["literature_research", "Literature research"], ["technical_feasibility", "Technical feasibility"], ["implementation_strategy", "Implementation strategy"], ["dependencies", "Dependencies"], ["risks", "Risks"], ["recommendations", "Recommendations"]],
+      falcon: [["component_investigated", "Component being investigated"], ["technical_architecture", "Technical architecture"], ["detailed_analysis", "Detailed analysis"], ["implementation_requirements", "Implementation requirements"], ["testing_strategy", "Testing strategy"], ["limitations", "Limitations"]]
+    };
+    function wsMsg(ws, text) { var m = $(ws + "-msg"); if (m) m.textContent = text || ""; }
+    function renderWsSections(ws, payload) {
+      var wrap = $(ws + "-sections"); if (!wrap) return;
+      var notes = (payload && payload.notes) || {};
+      wrap.innerHTML = WS_FIELDS[ws].map(function (pair) {
+        var key = pair[0];
+        return '<div class="ws-field"><label for="' + ws + "-" + key + '">' + esc(pair[1]) + '</label>' +
+          '<textarea id="' + ws + "-" + key + '" data-ws-field="' + key + '" placeholder="Paste research for this section, or type manually…">' + esc(notes[key] || "") + "</textarea></div>";
+      }).join("");
+    }
+    function renderWsHistory(ws, payload) {
+      var el = $(ws + "-history"); if (!el) return;
+      var hist = (payload && payload.history) || [];
+      el.innerHTML = hist.length ? hist.map(function (e) {
+        return "<li><strong>" + esc(e.agent || ws) + "</strong> · iter " + esc(e.iteration || 1) + " · " + esc(e.status || "—") +
+          (e.updated_at ? "<time>" + esc(e.updated_at) + "</time>" : "") +
+          (e.output ? '<pre class="output-pre">' + esc(String(e.output).slice(0, 600)) + "</pre>" : "") + "</li>";
+      }).join("") : '<li class="muted">No history yet.</li>';
+    }
     function renderCrowFalcon() {
       var byId = {};
       (ctx.state.executions || []).forEach(function (e) { byId[e.agent] = e; });
-      $("crow-output").textContent = (byId.crow && byId.crow.output) || "—";
-      $("falcon-output").textContent = (byId.falcon && byId.falcon.output) || "—";
+      var crowWs = ctx.state.crowWs, falWs = ctx.state.falconWs;
+      /* selected hypothesis banner (stored top) */
+      var sel = (crowWs && crowWs.selected_hypothesis) || (ctx.state.winning && (ctx.state.winning.title || ctx.state.winning.top_hypothesis)) || "";
+      if ($("crow-selected")) $("crow-selected").textContent = sel || "— (select a winner in Ranking/Laboratory first)";
+      /* Falcon ref to Crow output */
+      var crowOut = (byId.crow && byId.crow.output) || "";
+      if ($("falcon-crow-ref")) $("falcon-crow-ref").textContent = crowOut ? crowOut.slice(0, 80) + "…" : "— (save Crow first)";
+      /* prompt + raw */
+      function pTxt(wsPayload, fallbackExe) { return (wsPayload && wsPayload.prompt) || (fallbackExe && fallbackExe.prompt) || "—"; }
+      if ($("crow-output")) $("crow-output").textContent = (crowWs && crowWs.saved_output) || (byId.crow && byId.crow.output) || "—";
+      if ($("falcon-output")) $("falcon-output").textContent = (falWs && falWs.saved_output) || (byId.falcon && byId.falcon.output) || "—";
+      if ($("crow-prompt")) $("crow-prompt").textContent = pTxt(crowWs, byId.crow);
+      if ($("falcon-prompt")) $("falcon-prompt").textContent = pTxt(falWs, byId.falcon);
+      renderWsSections("crow", crowWs); renderWsSections("falcon", falWs);
+      renderWsHistory("crow", crowWs); renderWsHistory("falcon", falWs);
     }
+    /* Workspace button wiring (real API ops, manual paste only — no browsing) */
+    document.querySelectorAll("[data-ws-gen]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var ws = btn.getAttribute("data-ws-gen");
+        if (!ctx.state.runId) { wsMsg(ws, "No mission selected."); return; }
+        wsMsg(ws, "Generating " + ws + " prompt…");
+        ctx.api.generateWorkspace(ctx.state.runId, ws).then(function (d) {
+          if (d.prompt) $(ws + "-prompt").textContent = d.prompt;
+          wsMsg(ws, d.warnings && d.warnings.length ? "Warning: " + d.warnings.join("; ") : "Prompt generated (paste external AI output into Inspector or sections).");
+          ctx.refresh();
+        }).catch(function (err) { wsMsg(ws, "Generate failed (deps?): " + err.message); });
+      });
+    });
+    document.querySelectorAll("[data-ws-copy]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var ws = btn.getAttribute("data-ws-copy");
+        var txt = ($(ws + "-prompt").textContent || "").trim();
+        if (!txt || txt === "—") { wsMsg(ws, "Nothing to copy — generate a prompt first."); return; }
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(function () { wsMsg(ws, "Prompt copied."); });
+        else wsMsg(ws, "Clipboard unavailable — copy manually.");
+      });
+    });
+    document.querySelectorAll("[data-ws-parse]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var ws = btn.getAttribute("data-ws-parse");
+        ctx.api.parseWorkspace(ctx.state.runId, ws, null).then(function (d) {
+          wsMsg(ws, d.message || "Parsed.");
+          ctx.refresh();
+        }).catch(function (err) { wsMsg(ws, "Parse failed: " + err.message); });
+      });
+    });
+    document.querySelectorAll("[data-ws-save-sections]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var ws = btn.getAttribute("data-ws-save-sections");
+        var fields = {};
+        document.querySelectorAll("#" + ws + "-sections textarea").forEach(function (ta) { fields[ta.dataset.wsField] = ta.value; });
+        ctx.api.patchWorkspace(ctx.state.runId, ws, fields).then(function () { wsMsg(ws, "Sections saved to SQLite (manual input)."); ctx.refresh(); })
+          .catch(function (err) { wsMsg(ws, "Save failed: " + err.message); });
+      });
+    });
 
     function renderFinch() {
       var runs = ctx.state.finchRuns || [], cons = consensusOf(ctx.state);

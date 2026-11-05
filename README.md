@@ -170,3 +170,15 @@ Ranking agent results from stored SQLite only (no demo values):
 Dashboard: winner hero, leaderboard with inline correction, ELO bars, tournament list, changes timeline, history snapshots — all polled from `/ranking`.
 
 Tests: `tests/test_ranking_dashboard.py` (9 tests). Full suite (`pytest tests/`): 79 passed.
+
+## PHASE 9 — Crow and Falcon Workspaces
+
+Dedicated investigation interfaces (manual-paste only, no internet browsing):
+
+- **Crow** fields: Selected hypothesis (from SQLite top), Literature research, Technical feasibility, Implementation strategy, Dependencies, Risks, Recommendations.
+- **Falcon** fields: Component being investigated, Technical architecture, Detailed analysis, Implementation requirements, Testing strategy, Limitations.
+- **Flow:** `POST /workspace/<crow|falcon>/generate` (prompt with real prior outputs) → external AI → `POST /save` (validated completion, auto-parses `##` sections into workspace notes) → paste also via PATCH `POST /workspace/<ws>` {sections} for manual edits; `POST /workspace/<ws>/parse` re-splits saved output. Raw output always preserved; parse failure keeps raw + manual guidance (no fabrication).
+- **History:** each workspace returns execution history (iteration/status/timestamps/raw excerpt) + timestamps per section.
+- **Templates** (`prompts/crow.txt`, `falcon.txt`) updated to request the exact section headings.
+
+Tests: `tests/test_workspaces.py` (7 tests). Full suite: 86 passed.

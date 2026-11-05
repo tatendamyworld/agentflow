@@ -802,6 +802,11 @@ def create_app(project="."):
             warnings = []
         try:
             db.save_output(run_id, agent, output, project, top_hypothesis=top, raw_data=raw_data, overwrite=overwrite)
+            if agent in ("crow", "falcon"):
+                try:
+                    backend_models.sync_workspace_from_output(project, run_id, agent, run["current_iteration"], output)
+                except Exception:
+                    pass
         except ValueError as exc:
             return None, err(str(exc), 409)
         if top and agent == "ranking":
@@ -1376,6 +1381,105 @@ def create_app(project="."):
         except Exception:
             pass
         return jsonify(run_id=run_id, **hist)
+
+    # -- Crow / Falcon workspaces (PHASE 9) ---------------------------------
+    def _workspace_payload(run, workspace):
+        it = run["current_iteration"]
+        notes, ts = backend_models.get_workspace_notes(project, run["id"], workspace, it)
+        exe = db.get_execution(run["id"] if isinstance(run, dict) else run.get("id"), workspace, project=project) if isinstance(run, dict) else None
+        exes = current_exes(run) if isinstance(run, dict) else []
+        top = top_hypothesis_for(run, exes) if isinstance(run, dict) else ""
+        # Crow selected hypothesis: SELECTED review first, else top text
+        selected = top or None
+        labels = backend_models.WORKSPACE_LABELS.get(workspace, {})
+        sections = [{"field": k, "label": labels.get(k, k), "value": notes.get(k, ""), "updated_at": ts.get(k)} for k in backend_models.WORKSPACE_FIELDS.get(workspace, [])]
+        return {"workspace": workspace, "run_id": run["id"] if isinstance(run, dict) else None,
+                "iteration": it, "goal": run.get("goal") if isinstance(run, dict) else None,
+                "selected_hypothesis": selected if workspace == "crow" else (top or None),
+                "top_hypothesis": top or None,
+                "sections": sections, "notes": notes,
+                "prompt": (exe or {}).get("prompt"), "raw_output": (exe or {}).get("output"),
+                "saved_output": (exe or {}).get("output"), "status": (exe or {}).get("status", "PENDING"),
+                "created_at": (exe or {}).get("created_at"), "updated_at": (exe or {}).get("updated_at"),
+                "history": db.get_execution_history(run["id"], agent=workspace, project=project) if isinstance(run, dict) else []}
+
+    @app.route("/api/runs/<run_id>/workspace/<workspace>", methods=["GET"])
+    def get_workspace(run_id, workspace):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        if workspace not in backend_models.WORKSPACE_FIELDS:
+            return err(f"unknown workspace {workspace}", 404)
+        return jsonify(_workspace_payload(run, workspace))
+
+    @app.route("/api/runs/<run_id>/workspace/<workspace>/parse", methods=["POST"])
+    def parse_workspace(run_id, workspace):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        if workspace not in backend_models.WORKSPACE_FIELDS:
+            return err(f"unknown workspace {workspace}", 404)
+        data = body()
+        text = (data or {}).get("output") if data else None
+        exe = db.get_execution(run_id, workspace, project=project)
+        text = text or (exe or {}).get("output") or ""
+        report = backend_models.sync_workspace_from_output(project, run_id, workspace, run["current_iteration"], text)
+        return jsonify(run_id=run_id, workspace=workspace, **report, payload=_workspace_payload(run, workspace))
+
+    @app.route("/api/runs/<run_id>/workspace/<workspace>", methods=["PATCH"])
+    def patch_workspace(run_id, workspace):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        if workspace not in backend_models.WORKSPACE_FIELDS:
+            return err(f"unknown workspace {workspace}", 404)
+        data = body()
+        if data is None:
+            return err("request body must be a JSON object")
+        notes = data.get("sections") or data.get("notes") or data
+        cleaned = {}
+        allowed = set(backend_models.WORKSPACE_FIELDS[workspace])
+        for k, v in (notes or {}).items():
+            if k not in allowed:
+                continue
+            if v is not None and not isinstance(v, str):
+                return err(f"{k} must be a string")
+            if v is not None and len(v) > 100000:
+                return err(f"{k} exceeds 100000 characters")
+            cleaned[k] = v or ""
+        if not cleaned:
+            return err("no editable sections provided")
+        notes2, _ = backend_models.set_workspace_notes(project, run_id, workspace, cleaned, run["current_iteration"])
+        return jsonify(run_id=run_id, workspace=workspace, notes=notes2, payload=_workspace_payload(run, workspace))
+
+    @app.route("/api/runs/<run_id>/workspace/<workspace>/generate", methods=["POST"])
+    def generate_workspace(run_id, workspace):
+        # Delegate to core generate checks (sequence + missing deps), then return workspace view
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        if workspace not in backend_models.WORKSPACE_FIELDS:
+            return err(f"unknown workspace {workspace}", 404)
+        data = body()
+        if data is None:
+            return err("request body must be a JSON object")
+        exes = current_exes(run)
+        problem = check_sequence(exes, workspace)
+        if problem:
+            try:
+                cur = db.get_execution(run_id, workspace, project=project)
+                if cur and cur.get("status") not in ("COMPLETED",):
+                    db.set_execution_status(run_id, workspace, "BLOCKED", project)
+            except Exception:
+                pass
+            return err(f"BLOCKED: {problem}", 409)
+        try:
+            payload = _ops.build_prompt_preview(workspace, run, exes, raw_data="", top_hypothesis=top_hypothesis_for(run, exes), save=True, project=project)
+        except FileNotFoundError as exc:
+            return err(str(exc), 404)
+        return jsonify(run_id=run_id, workspace=workspace, prompt=payload["prompt"], unresolved=payload["unresolved"], warnings=payload["warnings"], missing=payload["missing"], payload=_workspace_payload(run, workspace))
+
+
 
     # -- timeline / export / loop / diff --------------------------------------
 

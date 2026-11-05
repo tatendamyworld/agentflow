@@ -74,6 +74,16 @@ CREATE TABLE IF NOT EXISTS ranking_matches (
 );
 CREATE INDEX IF NOT EXISTS idx_ranking_events_run ON ranking_events(run_id, iteration);
 CREATE INDEX IF NOT EXISTS idx_ranking_matches_run ON ranking_matches(run_id, iteration);
+CREATE TABLE IF NOT EXISTS workspace_notes (
+  run_id TEXT NOT NULL,
+  iteration INTEGER NOT NULL DEFAULT 1,
+  workspace TEXT NOT NULL,
+  field TEXT NOT NULL,
+  value TEXT,
+  updated_at TEXT,
+  PRIMARY KEY (run_id, iteration, workspace, field),
+  FOREIGN KEY (run_id) REFERENCES runs(id)
+);
 CREATE INDEX IF NOT EXISTS idx_hypotheses_run
   ON hypotheses(run_id, iteration);
 """
@@ -692,3 +702,102 @@ def get_ranking_history(project, run_id):
     events = list_ranking_events(project, run_id)
     matches = list_ranking_matches(project, run_id)
     return {"snapshots": snaps, "events": events, "matches": matches}
+
+
+# ---------------------------------------------------------------------------
+# Crow / Falcon workspaces (PHASE 9): structured investigation notes
+# Manual-paste only — no internet browsing. Research done externally.
+# ---------------------------------------------------------------------------
+
+WORKSPACE_FIELDS = {
+    "crow": ["literature_research", "technical_feasibility", "implementation_strategy", "dependencies", "risks", "recommendations"],
+    "falcon": ["component_investigated", "technical_architecture", "detailed_analysis", "implementation_requirements", "testing_strategy", "limitations"],
+}
+WORKSPACE_LABELS = {
+    "crow": {"literature_research": "Literature research", "technical_feasibility": "Technical feasibility", "implementation_strategy": "Implementation strategy", "dependencies": "Dependencies", "risks": "Risks", "recommendations": "Recommendations"},
+    "falcon": {"component_investigated": "Component being investigated", "technical_architecture": "Technical architecture", "detailed_analysis": "Detailed analysis", "implementation_requirements": "Implementation requirements", "testing_strategy": "Testing strategy", "limitations": "Limitations"},
+}
+_WS_HEADING_ALIASES = {
+    "crow": {"research": "literature_research", "literature": "literature_research", "literature research": "literature_research",
+             "feasibility": "technical_feasibility", "technical feasibility": "technical_feasibility",
+             "plan": "implementation_strategy", "strategy": "implementation_strategy", "implementation strategy": "implementation_strategy",
+             "dependencies": "dependencies", "risks": "risks", "recommendations": "recommendations", "recommendation": "recommendations"},
+    "falcon": {"component": "component_investigated", "component being investigated": "component_investigated",
+               "technical architecture": "technical_architecture", "architecture": "technical_architecture",
+               "findings": "detailed_analysis", "analysis": "detailed_analysis", "detailed analysis": "detailed_analysis",
+               "requirements": "implementation_requirements", "implementation requirements": "implementation_requirements",
+               "tests": "testing_strategy", "testing strategy": "testing_strategy",
+               "limitations": "limitations", "recommendations": "limitations"},
+}
+
+def parse_workspace_sections(workspace, text):
+    """Split pasted output by ## headings into canonical fields. Unknown headings ignored."""
+    sections = {f: "" for f in WORKSPACE_FIELDS.get(workspace, [])}
+    if not text or not str(text).strip():
+        return sections
+    aliases = _WS_HEADING_ALIASES.get(workspace, {})
+    current = None
+    buf = []
+    def flush():
+        if current in sections:
+            prev = sections[current].strip()
+            chunk = "\n".join(buf).strip()
+            sections[current] = (prev + "\n" + chunk).strip() if prev else chunk
+    for line in str(text).splitlines():
+        h = re.match(r"^##\s+(.+?)\s*$", line.strip())
+        if h:
+            flush()
+            key = h.group(1).strip().lower()
+            current = aliases.get(key)
+            buf = []
+        elif current:
+            buf.append(line)
+    flush()
+    return sections
+
+
+def get_workspace_notes(project, run_id, workspace, iteration=1):
+    if workspace not in WORKSPACE_FIELDS:
+        raise ValueError(f"unknown workspace {workspace}")
+    con = _connect(project)
+    try:
+        rows = con.execute("SELECT * FROM workspace_notes WHERE run_id=? AND iteration=? AND workspace=?", (run_id, iteration or 1, workspace)).fetchall()
+    finally:
+        con.close()
+    d = {f: "" for f in WORKSPACE_FIELDS[workspace]}
+    ts = {}
+    for r in rows:
+        if r["field"] in d:
+            d[r["field"]] = r["value"] or ""
+            ts[r["field"]] = r["updated_at"]
+    return d, ts
+
+
+def set_workspace_notes(project, run_id, workspace, notes, iteration=1):
+    """Manual structured edits (never fabricates values beyond caller input)."""
+    if workspace not in WORKSPACE_FIELDS:
+        raise ValueError(f"unknown workspace {workspace}")
+    allowed = set(WORKSPACE_FIELDS[workspace])
+    con = _connect(project)
+    try:
+        for field, value in (notes or {}).items():
+            if field not in allowed:
+                continue
+            con.execute("INSERT INTO workspace_notes(run_id,iteration,workspace,field,value,updated_at) VALUES(?,?,?,?,?,?) "
+                        "ON CONFLICT(run_id,iteration,workspace,field) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                        (run_id, iteration or 1, workspace, field, str(value) if value is not None else "", _now()))
+        con.commit()
+    finally:
+        con.close()
+    return get_workspace_notes(project, run_id, workspace, iteration)
+
+
+def sync_workspace_from_output(project, run_id, workspace, iteration, output_text):
+    """Parse saved response into sections (persist, no fabrication if no headings)."""
+    sections = parse_workspace_sections(workspace, output_text)
+    nonempty = {k: v for k, v in sections.items() if v.strip()}
+    if nonempty:
+        set_workspace_notes(project, run_id, workspace, nonempty, iteration)
+    notes, _ = get_workspace_notes(project, run_id, workspace, iteration)
+    return {"notes": notes, "parsed_fields": list(nonempty.keys()), "parse_ok": bool(nonempty),
+            "message": ("Parsed " + str(len(nonempty)) + " sections." if nonempty else "No recognised section headings — paste with ## headings or edit manually (no data fabricated).")}

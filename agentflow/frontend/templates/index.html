@@ -189,20 +189,51 @@
       <div id="rank-history" class="muted small">No history yet.</div>
     </section>
 
-    <!-- Crow / Falcon -->
+    <!-- Crow / Falcon — PHASE 9 Workspaces -->
     <section id="crow-falcon" class="panel" aria-labelledby="cf-title">
-      <div class="panel-head"><h2 id="cf-title">Crow &amp; Falcon</h2></div>
+      <div class="panel-head"><h2 id="cf-title">Crow &amp; Falcon Workspaces</h2>
+        <span class="muted small">Manual paste only — AgentFlow never browses the internet. Research by external AI, results pasted here.</span></div>
       <div class="tabs" role="tablist" aria-label="Crow and Falcon">
         <button type="button" role="tab" id="tab-crow" aria-controls="panel-crow" aria-selected="true" class="tab is-active">Crow</button>
         <button type="button" role="tab" id="tab-falcon" aria-controls="panel-falcon" aria-selected="false" class="tab">Falcon</button>
       </div>
       <div id="panel-crow" role="tabpanel" aria-labelledby="tab-crow" class="tab-panel">
-        <div class="panel-actions"><button type="button" class="btn btn-ghost btn-small" data-cf-copy="crow">Copy Crow output</button></div>
+        <p class="muted small">Selected hypothesis: <strong id="crow-selected">—</strong></p>
+        <p id="crow-msg" class="muted small" role="status"></p>
+        <div class="panel-actions">
+          <button type="button" class="btn btn-primary btn-small" data-ws-gen="crow">GENERATE PROMPT</button>
+          <button type="button" class="btn btn-ghost btn-small" data-ws-copy="crow">COPY PROMPT</button>
+          <button type="button" class="btn btn-ghost btn-small" data-ws-parse="crow">Re-parse saved output</button>
+          <button type="button" class="btn btn-primary btn-small" data-ws-save-sections="crow">Save sections</button>
+          <button type="button" class="btn btn-ghost btn-small" data-cf-copy="crow">Copy Crow output</button>
+        </div>
+        <h3 class="insp-h">Generated prompt</h3>
+        <pre id="crow-prompt" class="output-pre">—</pre>
+        <h3 class="insp-h">Saved response (raw)</h3>
         <pre id="crow-output" class="output-pre">—</pre>
+        <h3 class="insp-h">Investigation sections</h3>
+        <div class="ws-sections" id="crow-sections"></div>
+        <h3 class="insp-h">Execution history</h3>
+        <ol id="crow-history" class="timeline"><li class="muted">No history yet.</li></ol>
       </div>
       <div id="panel-falcon" role="tabpanel" aria-labelledby="tab-falcon" class="tab-panel" hidden>
-        <div class="panel-actions"><button type="button" class="btn btn-ghost btn-small" data-cf-copy="falcon">Copy Falcon output</button></div>
+        <p class="muted small">Component focus: edit below · Crow output context: <strong id="falcon-crow-ref">—</strong></p>
+        <p id="falcon-msg" class="muted small" role="status"></p>
+        <div class="panel-actions">
+          <button type="button" class="btn btn-primary btn-small" data-ws-gen="falcon">GENERATE PROMPT</button>
+          <button type="button" class="btn btn-ghost btn-small" data-ws-copy="falcon">COPY PROMPT</button>
+          <button type="button" class="btn btn-ghost btn-small" data-ws-parse="falcon">Re-parse saved output</button>
+          <button type="button" class="btn btn-primary btn-small" data-ws-save-sections="falcon">Save sections</button>
+          <button type="button" class="btn btn-ghost btn-small" data-cf-copy="falcon">Copy Falcon output</button>
+        </div>
+        <h3 class="insp-h">Generated prompt</h3>
+        <pre id="falcon-prompt" class="output-pre">—</pre>
+        <h3 class="insp-h">Saved response (raw)</h3>
         <pre id="falcon-output" class="output-pre">—</pre>
+        <h3 class="insp-h">Investigation sections</h3>
+        <div class="ws-sections" id="falcon-sections"></div>
+        <h3 class="insp-h">Execution history</h3>
+        <ol id="falcon-history" class="timeline"><li class="muted">No history yet.</li></ol>
       </div>
     </section>
 
