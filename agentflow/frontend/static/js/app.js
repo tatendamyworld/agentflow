@@ -71,6 +71,12 @@
         .catch(function (e1) { return req("/api/runs/" + encodeURIComponent(id) + "/generate", { method: "POST", body: { agent_id: agent } }); });
     },
     save: function (id, payload) { return req("/api/runs/" + encodeURIComponent(id) + "/save", { method: "POST", body: payload }); },
+    submit: function (id, payload) { return req("/api/runs/" + encodeURIComponent(id) + "/submit", { method: "POST", body: payload }); },
+    preview: function (id, agent) { return req("/api/runs/" + encodeURIComponent(id) + "/prompt-preview", { method: "POST", body: { agent: agent } }); },
+    copyPrompt: function (id, agent) { return req("/api/runs/" + encodeURIComponent(id) + "/copy/" + encodeURIComponent(agent)); },
+    retry: function (id, agent) { return req("/api/runs/" + encodeURIComponent(id) + "/retry", { method: "POST", body: { agent: agent } }); },
+    agentHistory: function (id, agent) { return req("/api/runs/" + encodeURIComponent(id) + "/agent/" + encodeURIComponent(agent) + "/history"); },
+    runHistory: function (id) { return req("/api/runs/" + encodeURIComponent(id) + "/history"); },
     saveTop: function (id, text) { return req("/api/runs/" + encodeURIComponent(id) + "/save-top", { method: "POST", body: { top_hypothesis: text } }).catch(function () { return req("/api/runs/" + encodeURIComponent(id) + "/save", { method: "POST", body: { agent: "ranking", top_hypothesis: text, output: text } }); }); },
     finch: function (id, responses) { return req("/api/runs/" + encodeURIComponent(id) + "/finch", { method: "POST", body: { responses: responses } }); }
   };

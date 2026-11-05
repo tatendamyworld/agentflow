@@ -178,3 +178,18 @@ dialog label{display:block;margin:.5rem 0 .25rem;color:var(--muted);font-size:.8
   .overview-grid{grid-template-columns:1fr}
   .topnav-mission-text{max-width:180px}
 }
+
+/* PHASE 5 — Inspector additions */
+.insp-section{margin:0 0 .9rem;padding:.65rem;background:#0b1526;border:1px solid var(--border);border-radius:var(--radius-sm)}
+.insp-section .insp-h{margin:0 0 .45rem}
+.insp-meta{margin:0;font-size:.82rem}
+.insp-meta div{display:flex;justify-content:space-between;gap:1rem;border-bottom:1px dashed var(--border);padding:.25rem 0}
+.insp-meta dt{color:var(--faint)} .insp-meta dd{margin:0;text-align:right;color:var(--text);max-width:190px;overflow:hidden;text-overflow:ellipsis}
+.insp-deps{list-style:none;margin:0;padding:0;font-size:.8rem}
+.insp-deps li{padding:.2rem 0;border-bottom:1px dashed var(--border)}
+.insp-deps .dep-ok{color:var(--completed)}
+.insp-deps .dep-missing{color:var(--waiting)}
+.insp-warning{background:#451a03;border:1px solid #9a3412;border-radius:var(--radius-sm);padding:.55rem .7rem;color:#fed7aa;font-size:.82rem;margin:0 0 .55rem}
+.insp-warning ul{margin:.35rem 0 0;padding-left:1.1rem}
+.insp-history{margin-top:.9rem}
+.insp-history .timeline li pre{margin-top:.35rem}

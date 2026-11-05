@@ -186,3 +186,104 @@ def new_iteration(rid, project="."):
                     (rid, new_it, a, "PENDING", _now(), _now()))
     con.commit(); con.close()
     return new_it
+
+
+def get_execution_history(rid, agent=None, project="."):
+    """Previous execution history — every row for a run (all iterations), oldest first.
+
+    Filter by agent when given. Caller gets timestamps + status so the UI
+    can render execution history (phase 5).
+    """
+    con = _connect(project)
+    try:
+        if agent:
+            rows = con.execute(
+                "SELECT * FROM executions WHERE run_id=? AND agent=? ORDER BY iteration, id",
+                (rid, agent)).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT * FROM executions WHERE run_id=? ORDER BY iteration, id",
+                (rid,)).fetchall()
+    finally:
+        con.close()
+    return [dict(r) for r in rows]
+
+
+def retry_execution(rid, agent, project=".", clear_output=True):
+    """Reset an execution slot (and all downstream slots) to PENDING.
+
+    RETRY STEP semantics: re-running an earlier agent invalidates
+    downstream results, so those slots are also cleared to preserve the
+    sequence invariant (no skipping). History rows for other iterations
+    are untouched. Returns the reset row for the target agent.
+    """
+    run = get_run(rid, project); assert run, "run not found"
+    if agent not in AGENTS_ORDER:
+        raise ValueError(f"unknown agent {agent}")
+    idx = AGENTS_ORDER.index(agent)
+    downstream = AGENTS_ORDER[idx:]
+    con = _connect(project)
+    try:
+        cur = con.execute(
+            "SELECT * FROM executions WHERE run_id=? AND agent=? AND iteration=?",
+            (rid, agent, run["current_iteration"])).fetchone()
+        assert cur, f"no execution slot for {agent}"
+        for down_agent in downstream:
+            row = con.execute(
+                "SELECT id FROM executions WHERE run_id=? AND agent=? AND iteration=?",
+                (rid, down_agent, run["current_iteration"])).fetchone()
+            if not row:
+                continue
+            if clear_output:
+                con.execute(
+                    "UPDATE executions SET output=NULL, status='PENDING', updated_at=? WHERE id=?",
+                    (_now(), row["id"]))
+            else:
+                con.execute(
+                    "UPDATE executions SET status='PENDING', updated_at=? WHERE id=?",
+                    (_now(), row["id"]))
+        con.execute("UPDATE runs SET updated_at=? WHERE id=?", (_now(), rid))
+        con.commit()
+    finally:
+        con.close()
+    return get_execution(rid, agent, project=project)
+
+
+def validate_output(agent, output):
+    """Response validation for a manual submission.
+
+    Returns (ok, errors[]). Guarantees: non-empty, length-capped callers
+    enforce max length separately, plus agent-specific shape rules:
+      - finch: must contain an explicit 'Key finding: YES|NO|INCONCLUSIVE' line
+      - ranking: should name a winner (Top hypothesis:) for Crow handoff —
+        warning only, not blocking? We keep it as error to prevent silent
+        missing downstream dependency. Frontend can still force via raw save?
+        For phase 5, ranking without Top hypothesis returns ok=False with
+        a clear error so Crow does not receive fabricated winner.
+      - others: non-empty is sufficient.
+    """
+    errors = []
+    if output is None or not str(output).strip():
+        return False, ["output must not be empty"]
+    t = str(output).strip()
+    if len(t) < 1:
+        return False, ["output must not be empty"]
+    if len(t) > 100_000:
+        return False, ["output exceeds 100000 characters"]
+    if agent == "finch":
+        from agentflow.consensus import parse_finch_vote
+        if parse_finch_vote(t) == "INVALID":
+            errors.append("finch output must contain 'Key finding: YES|NO|INCONCLUSIVE'")
+    elif agent == "ranking":
+        # Ranking must declare winner for Crow unless caller supplies
+        # top_hypothesis separately. We accept either signal.
+        import re
+        if not re.search(r"top\s+hypothesis", t, re.I):
+            errors.append("ranking output must include 'Top hypothesis: ...' for Crow handoff")
+    else:
+        # Generic: reject placeholder-only pastes (unsubstituted templates)
+        if "{{" in t and "}}" in t:
+            import re
+            if re.search(r"\{\{\w+\}\}", t):
+                errors.append("output still contains unresolved {{PLACEHOLDERS}} — paste the agent's answer, not the prompt template")
+    return (len(errors) == 0), errors

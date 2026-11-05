@@ -71,3 +71,48 @@ python run.py          # 127.0.0.1:5001 — dark dashboard, SVG 9-node network
 python -m agentflow.web
 ```
 Shares `.agentflow/state.db` with CLI. No internet needed, bind is 127.0.0.1 only.
+
+## PHASE 5 — Agent Operations Engine (visual inspector)
+
+Each of the nine agents now runs the full operations workflow via the dashboard + HTTP API
+(sharing the CLI SQLite DB; no LLM calls, no network, bind 127.0.0.1:5001):
+
+- **GENERATE PROMPT** — `POST /api/runs/:id/generate` renders the template with automatic
+  placeholder substitution from *real* preceding outputs only. Missing inputs are preserved
+  as `{{PLACEHOLDER}}` and returned in `unresolved`/`missing`/`warnings` — never fabricated.
+- **Prompt preview** — `POST /api/runs/:id/prompt-preview` renders without completing the step.
+- **COPY PROMPT** — `GET /api/runs/:id/copy/:agent`; frontend copies to clipboard.
+- **SUBMIT RESPONSE** — `POST /api/runs/:id/submit` (strict validation + persist).
+- **SAVE OUTPUT** — `POST /api/runs/:id/save` (validate + persist; blocks placeholder-paste / invalid Finch).
+  Both return `validation`, `created_at`/`updated_at` timestamps, and `next_agent`.
+- **VIEW HISTORY** — `GET /api/runs/:id/history` and `GET /api/runs/:id/agent/:agent/history`
+  (previous execution history across iterations).
+- **RETRY STEP** — `POST /api/runs/:id/retry` resets the step (and downstream) to PENDING and
+  regenerates a fresh prompt.
+
+Dependency chain enforced (real prior outputs only):
+
+```
+Supervisor -> Goal
+Generation -> Supervisor output (+ Goal)
+Proximity -> Generation output
+Reflection -> Proximity output
+Evolution -> Reflection output
+Ranking -> Evolution output
+Crow -> Selected top hypothesis + Ranking output
+Falcon -> Crow output + Original goal
+Finch -> Benchmark data (RAW_DATA, supplied at generate/submit)
+```
+
+Inspector (right rail) shows: Agent identity, Description, Workflow status
+(status/iteration/created/updated timestamps), Input dependencies (satisfied/missing),
+Generated prompt preview (with missing-info warning banner), Response editor,
+Saved output, Execution history.
+
+Response validation:
+- All agents: non-empty, length-capped, no unresolved `{{PLACEHOLDERS}}` pasted as output.
+- Finch: must contain `Key finding: YES|NO|INCONCLUSIVE`.
+- Ranking strict-submit requires `Top hypothesis:` so Crow cannot receive a fabricated winner.
+
+Tests: `tests/test_operations.py` (18 tests) covers dependencies, substitution, warnings,
+preview, copy, submit/save validation, timestamps, history, retry. Full suite: `pytest tests/` (46 passed).

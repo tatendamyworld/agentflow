@@ -194,33 +194,74 @@
     </section>
   </main>
 
-  <!-- Inspector -->
+  <!-- Inspector — PHASE 5 Agent Operations Engine -->
   <aside id="inspector" class="panel inspector" aria-labelledby="insp-title">
     <div class="panel-head">
-      <h2 id="insp-title">Inspector</h2>
+      <h2 id="insp-title">Agent Inspector</h2>
       <span id="insp-status" class="pill">—</span>
     </div>
-    <p class="muted small" id="insp-meta">Select a node in the network.</p>
 
-    <h3 class="insp-h">Prompt</h3>
-    <pre id="insp-prompt" class="output-pre">—</pre>
+    <div class="insp-section">
+      <h3 class="insp-h">Identity</h3>
+      <p id="insp-identity" class="small">Select a node in the network.</p>
+      <p id="insp-desc" class="muted small" aria-live="polite">—</p>
+    </div>
 
-    <h3 class="insp-h"><label for="insp-output">Output / paste area</label></h3>
-    <textarea id="insp-output" rows="10" placeholder="Paste the agent output here, then Save."></textarea>
+    <div class="insp-section">
+      <h3 class="insp-h">Workflow</h3>
+      <dl class="insp-meta">
+        <div><dt>Status</dt><dd id="insp-workflow-status">—</dd></div>
+        <div><dt>Iteration</dt><dd id="insp-iteration">—</dd></div>
+        <div><dt>Created</dt><dd id="insp-created">—</dd></div>
+        <div><dt>Updated</dt><dd id="insp-updated">—</dd></div>
+      </dl>
+    </div>
+
+    <div class="insp-section">
+      <h3 class="insp-h">Input dependencies</h3>
+      <ul id="insp-deps" class="insp-deps muted small"><li>Select an agent.</li></ul>
+    </div>
+
+    <div class="insp-section">
+      <h3 class="insp-h">Generated prompt (preview)</h3>
+      <div id="insp-warning" class="insp-warning" hidden role="alert"></div>
+      <pre id="insp-prompt" class="output-pre">—</pre>
+    </div>
+
+    <div class="insp-section">
+      <h3 class="insp-h"><label for="insp-output">Response editor (paste agent answer)</label></h3>
+      <textarea id="insp-output" rows="8" placeholder="Paste the agent's response here…"></textarea>
+    </div>
+
+    <div class="insp-section">
+      <h3 class="insp-h">Saved output</h3>
+      <pre id="insp-saved" class="output-pre">—</pre>
+    </div>
 
     <div id="insp-top-wrap" hidden>
-      <label for="insp-top" class="insp-h">Top hypothesis (Ranking)</label>
+      <label for="insp-top" class="insp-h">Top hypothesis (Ranking) — feeds Crow</label>
       <input type="text" id="insp-top" placeholder="Winning hypothesis text">
     </div>
 
-    <div class="btn-row btn-row-wrap">
-      <button type="button" id="insp-generate" class="btn btn-primary">Generate</button>
-      <button type="button" id="insp-copy" class="btn btn-ghost">Copy</button>
-      <button type="button" id="insp-paste" class="btn btn-ghost">Paste</button>
-      <button type="button" id="insp-save" class="btn btn-primary">Save</button>
-      <button type="button" id="insp-retry" class="btn btn-warn">Retry</button>
+    <div class="btn-row btn-row-wrap" aria-label="Agent operations">
+      <button type="button" id="insp-generate" class="btn btn-primary" title="Generate prompt with real placeholder substitution">GENERATE PROMPT</button>
+      <button type="button" id="insp-copy" class="btn btn-ghost" title="Copy generated prompt to clipboard">COPY PROMPT</button>
+      <button type="button" id="insp-submit" class="btn btn-primary" title="Submit response (strict validation + persist)">SUBMIT RESPONSE</button>
+      <button type="button" id="insp-save" class="btn btn-ghost" title="Save output (validate + persist)">SAVE OUTPUT</button>
+      <button type="button" id="insp-history" class="btn btn-ghost" aria-expanded="false" title="Show previous execution history">VIEW HISTORY</button>
+      <button type="button" id="insp-retry" class="btn btn-warn" title="Reset this step to PENDING and regenerate">RETRY STEP</button>
+      <button type="button" id="insp-paste" class="btn btn-ghost small" title="Paste from clipboard into editor">Paste</button>
     </div>
+    <p id="insp-validation" class="muted small" role="status" aria-live="polite"></p>
     <p id="insp-msg" class="muted small" role="status" aria-live="polite"></p>
+
+    <div id="insp-history" class="insp-history" hidden>
+      <h3 class="insp-h">Execution history</h3>
+      <ol id="insp-history-list" class="timeline"><li class="muted">No history loaded.</li></ol>
+    </div>
+
+    <!-- legacy alias for backwards compatibility -->
+    <span class="muted small" id="insp-meta" hidden>Select a node in the network.</span>
   </aside>
 </div>
 

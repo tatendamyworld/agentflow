@@ -21,12 +21,16 @@ from flask import Flask, Response, jsonify, request, send_file
 
 from agentflow import backend_models, db
 from agentflow.agents import (
-    AGENTS, AGENT_IDS, PLACEHOLDERS, build_context, load_template,
-    render_prompt, validate_sequence,
+    AGENTS, AGENT_BY_ID, AGENT_IDS, PLACEHOLDERS, build_context, dependencies_for,
+    load_template, missing_dependencies, render_prompt, validate_sequence,
 )
 from agentflow.consensus import (
     evaluate_consensus, parse_finch_vote, validate_finch_responses,
 )
+try:
+    from agentflow import ops as _ops
+except ImportError:
+    _ops = None
 
 HOST = "127.0.0.1"
 PORT = 5001
@@ -314,9 +318,37 @@ def create_app(project="."):
 
     @app.route("/api/agents")
     def list_agents():
-        agents = [{"id": a["id"], "name": a["name"], "order": a["order"],
-                   "agent": a["id"]} for a in AGENTS]
+        agents = []
+        for a in AGENTS:
+            try:
+                tmpl = load_template(a["id"])
+                placeholders = sorted(set(re.findall(r"\{\{(\w+)\}\}", tmpl)))
+            except FileNotFoundError:
+                placeholders = []
+            agents.append({"id": a["id"], "name": a["name"], "order": a["order"],
+                           "agent": a["id"],
+                           "description": a.get("description", ""),
+                           "dependencies": a.get("dependencies", []),
+                           "inputs": a.get("inputs", a.get("dependencies", [])),
+                           "placeholders": placeholders})
         return jsonify(agents=agents)
+
+    @app.route("/api/agents/<agent_id>", methods=["GET"])
+    def get_agent_detail(agent_id):
+        if agent_id not in AGENT_IDS:
+            return err(f"unknown agent {agent_id}", 404)
+        a = AGENT_BY_ID[agent_id]
+        try:
+            tmpl = load_template(agent_id)
+            placeholders = sorted(set(re.findall(r"\{\{(\w+)\}\}", tmpl)))
+        except FileNotFoundError:
+            tmpl, placeholders = "", []
+        return jsonify({"id": agent_id, "agent": agent_id, "name": a["name"],
+                        "order": a["order"], "description": a.get("description", ""),
+                        "dependencies": a.get("dependencies", []),
+                        "inputs": a.get("inputs", a.get("dependencies", [])),
+                        "template": tmpl, "content": tmpl,
+                        "placeholders": placeholders})
 
     @app.route("/api/agents/<agent_id>/template", methods=["GET"])
     def get_template(agent_id):
@@ -430,6 +462,44 @@ def create_app(project="."):
 
     # -- generate / save ------------------------------------------------------
 
+    @app.route("/api/runs/<run_id>/prompt-preview", methods=["POST", "GET"])
+    def prompt_preview(run_id):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        data = body() if request.method == "POST" else {}
+        agent, problem = valid_agent((data or {}).get("agent", (data or {}).get("agent_id", request.args.get("agent", request.args.get("agent_id")))))
+        if problem:
+            return err(problem)
+        raw_data, problem = valid_str((data or {}).get("raw_data", request.args.get("raw_data")), "raw_data", required=False)
+        if problem:
+            return err(problem)
+        top_arg, problem = valid_str((data or {}).get("top_hypothesis", request.args.get("top_hypothesis")), "top_hypothesis", required=False)
+        if problem:
+            return err(problem)
+        exes = current_exes(run)
+        # Sequence check first (clear warning, not fabricated)
+        seq_problem = check_sequence(exes, agent)
+        try:
+            if _ops is not None:
+                payload = _ops.build_prompt_preview(agent, run, exes, raw_data=raw_data or "", top_hypothesis=top_arg or top_hypothesis_for(run, exes), save=False, project=project)
+            else:
+                rendered, unresolved = render_and_save(run, agent, raw_data=raw_data or "", top_hypothesis=top_hypothesis_for(run, exes))
+                payload = {"prompt": rendered, "unresolved": unresolved}
+        except FileNotFoundError as exc:
+            return err(str(exc), 404)
+        execution = db.get_execution(run_id, agent, project=project)
+        return jsonify(run_id=run_id, agent=agent,
+                       prompt=payload.get("prompt"), preview=payload.get("prompt"),
+                       unresolved=payload.get("unresolved", []),
+                       missing=payload.get("missing", []),
+                       warnings=payload.get("warnings", []),
+                       dependencies=payload.get("dependencies", []),
+                       placeholders=payload.get("placeholders", []),
+                       sequence_ok=seq_problem is None,
+                       sequence_warning=seq_problem,
+                       execution=execution)
+
     @app.route("/api/runs/<run_id>/generate", methods=["POST"])
     def generate(run_id):
         run, failure = get_run_or_404(run_id)
@@ -450,17 +520,50 @@ def create_app(project="."):
         if problem:
             return err(problem, 409)
         try:
-            rendered, unresolved = render_and_save(
-                run, agent, raw_data=raw_data or "",
-                top_hypothesis=top_hypothesis_for(run, exes))
+            if _ops is not None:
+                payload = _ops.build_prompt_preview(agent, run, exes, raw_data=raw_data or "", top_hypothesis=top_hypothesis_for(run, exes), save=True, project=project)
+                rendered = payload["prompt"]; unresolved = payload["unresolved"]
+            else:
+                rendered, unresolved = render_and_save(
+                    run, agent, raw_data=raw_data or "",
+                    top_hypothesis=top_hypothesis_for(run, exes))
+                payload = {"warnings": [], "missing": unresolved, "dependencies": dependencies_for(agent)}
         except FileNotFoundError as exc:
             return err(str(exc), 404)
         execution = db.get_execution(run_id, agent, project=project)
-        return jsonify(agent=agent, prompt=rendered, unresolved=unresolved,
-                       execution=execution, run_id=run_id)
+        # Missing required dependencies: surface clear warning but still return prompt
+        # with unresolved placeholders preserved — never fabricate.
+        warnings = payload.get("warnings", [])
+        missing = payload.get("missing", []) or unresolved
+        if unresolved:
+            for u in unresolved:
+                if u not in missing:
+                    warnings.append(f"Unresolved placeholder {{{{{u}}}}} — missing upstream output.")
+        return jsonify(agent=agent, prompt=rendered, preview=rendered, unresolved=unresolved,
+                       missing=missing, warnings=warnings,
+                       dependencies=payload.get("dependencies", dependencies_for(agent)),
+                       ok=len(missing) == 0,
+                       execution=execution, run_id=run_id,
+                       generated_at=execution.get("updated_at") if execution else None)
 
-    @app.route("/api/runs/<run_id>/save", methods=["POST"])
-    def save(run_id):
+    @app.route("/api/runs/<run_id>/copy/<agent_id>", methods=["GET"])
+    def copy_prompt(run_id, agent_id):
+        """Return prompt text for client-side clipboard (COPY PROMPT)."""
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        if agent_id not in AGENT_IDS:
+            return err(f"unknown agent {agent_id}", 404)
+        execution = db.get_execution(run_id, agent_id, project=project)
+        if execution is None or not execution.get("prompt"):
+            return err(f"no prompt generated for {agent_id} — call GENERATE PROMPT first", 404)
+        return jsonify(agent=agent_id, prompt=execution["prompt"],
+                       copied=False, note="Client copies via navigator.clipboard. This endpoint supplies the source text.",
+                       run_id=run_id)
+
+    @app.route("/api/runs/<run_id>/retry", methods=["POST"])
+    def retry_step(run_id):
+        """RETRY STEP: reset slot to PENDING and regenerate a fresh prompt."""
         run, failure = get_run_or_404(run_id)
         if failure:
             return failure
@@ -470,26 +573,145 @@ def create_app(project="."):
         agent, problem = valid_agent(data.get("agent", data.get("agent_id")))
         if problem:
             return err(problem)
+        exes = current_exes(run)
+        done = completed_agents(exes)
+        idx = AGENT_IDS.index(agent)
+        # RETRY allowed when agent is next (pending) OR already completed
+        # (re-opening invalidates downstream — retry_execution truncates).
+        # Only block when sequence itself is broken or agent is far ahead.
+        try:
+            validate_sequence(done)
+        except ValueError as exc:
+            return err(str(exc), 409)
+        if idx > len(done):
+            return err(f"agent {agent} is not reachable yet: expected {AGENT_IDS[len(done)]} next", 409)
+        try:
+            reset = db.retry_execution(run_id, agent, project)
+        except AssertionError as exc:
+            return err(str(exc), 404)
+        # regenerate fresh prompt for the reset slot
+        fresh_run = db.get_run(run_id, project)
+        exes2 = current_exes(fresh_run)
+        raw_data = ""
+        try:
+            if _ops is not None:
+                payload = _ops.build_prompt_preview(agent, fresh_run, exes2, raw_data=raw_data, top_hypothesis=top_hypothesis_for(fresh_run, exes2), save=True, project=project)
+                rendered = payload["prompt"]; unresolved = payload["unresolved"]
+                warnings = payload.get("warnings", [])
+            else:
+                rendered, unresolved = render_and_save(fresh_run, agent, raw_data="", top_hypothesis=top_hypothesis_for(fresh_run, exes2))
+                warnings = []
+        except FileNotFoundError as exc:
+            return err(str(exc), 404)
+        execution = db.get_execution(run_id, agent, project=project)
+        return jsonify(agent=agent, prompt=rendered, unresolved=unresolved,
+                       warnings=warnings, execution=execution,
+                       reset=reset, run_id=run_id)
+
+    @app.route("/api/runs/<run_id>/history", methods=["GET"])
+    def run_history(run_id):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        history = db.get_execution_history(run_id, project=project)
+        return jsonify(history=history, executions=history, run_id=run_id,
+                       count=len(history))
+
+    @app.route("/api/runs/<run_id>/agent/<agent_id>/history", methods=["GET"])
+    def agent_history(run_id, agent_id):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        if agent_id not in AGENT_IDS:
+            return err(f"unknown agent {agent_id}", 404)
+        history = db.get_execution_history(run_id, agent=agent_id, project=project)
+        return jsonify(agent=agent_id, history=history, executions=history,
+                       run_id=run_id, count=len(history))
+
+
+    def _validated_save(run_id, run, data, strict_submit=False):
+        """Shared core for SAVE OUTPUT / SUBMIT RESPONSE. Returns (payload, err)."""
+        agent, problem = valid_agent(data.get("agent", data.get("agent_id")))
+        if problem:
+            return None, err(problem)
         output, problem = valid_str(data.get("output"), "output")
         if problem:
-            return err(problem)
+            return None, err(problem)
         top, problem = valid_str(data.get("top_hypothesis"), "top_hypothesis",
                                  required=False)
         if problem:
-            return err(problem)
+            return None, err(problem)
+        raw_data, problem = valid_str(data.get("raw_data"), "raw_data", required=False)
+        if problem:
+            return None, err(problem)
         exes = current_exes(run)
         problem = check_sequence(exes, agent)
         if problem:
-            return err(problem, 409)
-        db.save_output(run_id, agent, output, project, top_hypothesis=top)
+            return None, err(problem, 409)
+        # Response validation: ranking needs winner signal if no top passed
+        val_agent = agent
+        ok, errors = db.validate_output(val_agent, output)
+        # Ranking passes validation if caller supplied top_hypothesis explicitly
+        if agent == "ranking" and top:
+            if any("Top hypothesis" in e for e in errors):
+                errors = [e for e in errors if "Top hypothesis" not in e]
+                ok = len(errors) == 0
+        if strict_submit and not ok:
+            return None, (jsonify(error="Response validation failed", agent=agent, errors=errors, ok=False), 422)
+        # For save, surface validation as warnings but persist? Phase-5 says validate;
+        # save still blocks clearly-invalid (empty already blocked, placeholder-paste blocked)
+        if not strict_submit and not ok:
+            # Block placeholder-paste + finch-invalid with 422; ranking winner-less is warning-only for save
+            hard = [e for e in errors if "placeholder" in e.lower() or "finch" in e.lower() or "empty" in e.lower()]
+            if hard:
+                return None, (jsonify(error="Response validation failed", agent=agent, errors=errors, ok=False), 422)
+            warnings = errors
+        else:
+            warnings = []
+        db.save_output(run_id, agent, output, project, top_hypothesis=top, raw_data=raw_data)
         if top and agent == "ranking":
             db.save_top_hypothesis(run_id, top, project)
         execution = db.get_execution(run_id, agent, project=project)
         fresh = db.get_run(run_id, project)
-        return jsonify(agent=agent, output=output, execution=execution,
-                       run=run_payload(fresh),
-                       next_agent=next_agent(current_exes(fresh)),
-                       run_id=run_id)
+        payload = {"agent": agent, "output": output, "execution": execution,
+                   "saved_output": output,
+                   "validation": {"ok": ok, "errors": errors, "warnings": warnings},
+                   "ok": ok, "warnings": warnings,
+                   "created_at": execution.get("created_at") if execution else None,
+                   "updated_at": execution.get("updated_at") if execution else None,
+                   "run": run_payload(fresh),
+                   "next_agent": next_agent(current_exes(fresh)),
+                   "run_id": run_id}
+        return payload, None
+
+    @app.route("/api/runs/<run_id>/save", methods=["POST"])
+    def save(run_id):
+        """SAVE OUTPUT: validate + persist the pasted agent response."""
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        data = body()
+        if data is None:
+            return err("request body must be a JSON object")
+        payload, failure2 = _validated_save(run_id, run, data, strict_submit=False)
+        if failure2:
+            return failure2
+        return jsonify(payload)
+
+    @app.route("/api/runs/<run_id>/submit", methods=["POST"])
+    def submit(run_id):
+        """SUBMIT RESPONSE: strict validation then persist (manual submission)."""
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        data = body()
+        if data is None:
+            return err("request body must be a JSON object")
+        payload, failure2 = _validated_save(run_id, run, data, strict_submit=True)
+        if failure2:
+            return failure2
+        return jsonify(payload)
+
 
     @app.route("/api/runs/<run_id>/execution/<agent_id>", methods=["GET"])
     def get_execution(run_id, agent_id):
@@ -501,8 +723,33 @@ def create_app(project="."):
         execution = db.get_execution(run_id, agent_id, project=project)
         if execution is None:
             return err(f"no execution for {agent_id} in run {run_id}", 404)
-        return jsonify({**execution, "execution": execution, "agent": agent_id,
-                        "run_id": run_id})
+        meta = AGENT_BY_ID.get(agent_id, {})
+        exes = current_exes(run)
+        try:
+            tmpl = load_template(agent_id)
+            placeholders = sorted(set(re.findall(r"\{\{(\w+)\}\}", tmpl)))
+        except FileNotFoundError:
+            tmpl, placeholders = "", []
+        payload = {"id": agent_id, "agent": agent_id, "name": meta.get("name", agent_id),
+                   "description": meta.get("description", ""),
+                   "dependencies": meta.get("dependencies", []),
+                   "placeholders": placeholders, "template": tmpl,
+                   "status": execution.get("status"), "workflow_status": execution.get("status"),
+                   "prompt": execution.get("prompt"), "output": execution.get("output"),
+                   "saved_output": execution.get("output"),
+                   "created_at": execution.get("created_at"), "updated_at": execution.get("updated_at"),
+                   "iteration": execution.get("iteration"), "run_id": run_id,
+                   "execution": execution}
+        if _ops is not None:
+            try:
+                preview = _ops.build_prompt_preview(agent_id, run, exes, save=False, project=project)
+                payload["preview"] = preview.get("prompt")
+                payload["unresolved"] = preview.get("unresolved", [])
+                payload["missing"] = preview.get("missing", [])
+                payload["warnings"] = preview.get("warnings", [])
+            except Exception:
+                pass
+        return jsonify(payload)
 
     @app.route("/api/runs/<run_id>/save-top", methods=["POST"])
     def save_top(run_id):
