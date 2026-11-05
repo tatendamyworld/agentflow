@@ -323,26 +323,125 @@
       }).catch(function (err) { hypMsg("Create failed: " + err.message); });
     });
 
-    /** ---------- ranking table ---------- */
+    /** ---------- ranking dashboard (PHASE 8) ---------- */
+    function rankMsg(text) { var m = $("rank-msg"); if (m) m.textContent = text || ""; }
+
     function renderRanking() {
+      var msg = rankMsg;
       var tb = $("ranking-table").querySelector("tbody");
-      var rows = [];
-      var nested = ctx.state.ranking;
-      if (Array.isArray(nested) && nested.length) {
-        rows = nested.map(function (r, i) { return { rank: r.rank || i + 1, text: r.text || r.hypothesis || "", score: r.score, source: r.agent || r.source || "", status: r.status || "" }; });
-      } else {
-        var ranked = collectHypotheses().slice().sort(function (a, b) {
-          return ((b.score != null ? b.score : -Infinity) - (a.score != null ? a.score : -Infinity));
-        });
-        rows = ranked.map(function (h, i) { return { rank: i + 1, text: hypState.edits[h.id] != null ? hypState.edits[h.id] : h.text, score: h.score, source: h.source, status: h.top ? "TOP" : "" }; });
+      var dash = ctx.state.rankingDashboard || {};
+      var board = (Array.isArray(ctx.state.ranking) && ctx.state.ranking) || [];
+      var winner = ctx.state.winning || dash.winning_hypothesis || null;
+      /* Winning hypothesis hero + Crow availability (from stored results) */
+      var wEl = $("rank-winner-text"), crowEl = $("rank-crow");
+      var topText = (winner && (winner.top_hypothesis || winner.title)) || dash.top_hypothesis || "—";
+      if (wEl) wEl.textContent = winner ? ("Winner: " + esc(winner.title || topText) + (winner.elo_rating != null ? " (ELO " + Math.round(winner.elo_rating) + ")" : "") + (winner.survivability != null ? " · surv " + winner.survivability : "")) : "No winner — select in Hypothesis Laboratory or save Ranking output with Top hypothesis line.";
+      if (crowEl) crowEl.textContent = (dash.crow && dash.crow.available) || dash.crow_available ? "Crow: winner available — next Generate/Crow prompt will replace {{TOP_HYPOTHESIS}} with this value (SQLite executions.top_hypothesis)." : "Crow: no winner stored yet — Crow prompt will warn on missing {{TOP_HYPOTHESIS}} (no fabrication).";
+      /* Leaderboard from stored ranking only — never invent when empty */
+      if (!board.length) {
+        tb.innerHTML = '<tr><td colspan=9 class="muted">No ranking data yet — run Ranking / import, or create hypotheses manually.</td></tr>';
+        $("rank-note").textContent = "";
+        var e0 = $("rank-elo"); if (e0) e0.innerHTML = '<p class="muted">No ELO values stored.</p>';
+        var m0 = $("rank-matches"); if (m0) m0.textContent = "No tournament results.";
+        var c0 = $("rank-changes"); if (c0) c0.innerHTML = '<li class="muted">No recorded changes.</li>';
+        var h0 = $("rank-history"); if (h0) h0.textContent = "No history.";
+        return;
       }
-      if (!rows.length) { tb.innerHTML = '<tr><td colspan="5" class="muted">No ranking data yet.</td></tr>'; $("rank-note").textContent = ""; return; }
-      $("rank-note").textContent = rows.length + " ranked";
-      tb.innerHTML = rows.map(function (r) {
-        return "<tr><td>" + esc(r.rank) + "</td><td>" + esc(r.text) + "</td><td>" + esc(r.score != null ? r.score : "—") +
-          "</td><td>" + esc(r.source || "—") + "</td><td>" + esc(r.status || "—") + "</td></tr>";
+      $("rank-note").textContent = board.length + " ranked · all values from SQLite";
+      tb.innerHTML = board.map(function (r) {
+        var id = esc(r.id);
+        var title = r.title || r.text || r.hypothesis || "—";
+        var elo = r.elo_rating != null ? Math.round(r.elo_rating) : "—";
+        var surv = r.survivability != null ? r.survivability : (r.survivability_score != null ? r.survivability_score : "—");
+        var chg = r.rank_change != null ? (r.rank_change > 0 ? ("▲ " + r.rank_change) : (r.rank_change < 0 ? ("▼ " + Math.abs(r.rank_change)) : "—")) : "—";
+        var editable = Number.isInteger(Number(r.id));
+        return "<tr data-hyp-id='" + id + "'>" +
+          "<td><input class='rank-correct-input' data-rank-pos='" + id + "' type='number' min='1' value='" + esc(r.rank != null ? r.rank : "") + "' aria-label='Rank for " + esc(title) + "'></td>" +
+          "<td>" + esc(title) + "<div class='muted small'>#" + esc(id) + " iter " + esc(r.iteration != null ? r.iteration : "—") + "</div></td>" +
+          "<td><span data-elo='" + id + "'>" + esc(elo) + "</span><div><input class='rank-correct-input' data-elo-edit='" + id + "' type='number' placeholder='ELO' value='" + esc(r.elo_rating != null ? Math.round(r.elo_rating) : "") + "'></div></td>" +
+          "<td>" + esc(surv) + "<div><input class='rank-correct-input' data-surv-edit='" + id + "' type='number' step='0.1' placeholder='0-10' value='" + esc(r.survivability != null ? r.survivability : "") + "'></div></td>" +
+          "<td>" + esc(r.score != null ? r.score : "—") + "<div><input class='rank-correct-input' data-score-edit='" + id + "' type='number' placeholder='Score' value='" + esc(r.score != null ? r.score : "") + "'></div></td>" +
+          "<td>" + esc(r.source_agent || r.agent || r.source || "—") + "</td>" +
+          "<td>" + esc(r.status || "—") + "</td>" +
+          "<td>" + esc(chg) + "</td>" +
+          "<td>" + (editable ? "<button class='btn btn-ghost btn-small' data-rank-save='" + id + "'>Save</button> <button class='btn btn-ghost btn-small' data-rank-select='" + id + "'>Select</button>" : "—") + "</td></tr>";
       }).join("");
+      /* ELO visualisation — bars scaled within leaderboard from stored elo_pct */
+      var eEl = $("rank-elo");
+      if (eEl) {
+        var vis = ctx.state.eloVisual && ctx.state.eloVisual.length ? ctx.state.eloVisual : board;
+        eEl.innerHTML = vis.map(function (r) {
+          var pct = r.elo_pct != null ? r.elo_pct : (r.elo != null ? null : null);
+          var label = "#" + esc(r.id) + " " + esc((r.title || r.text || "—").slice(0, 44));
+          var bar = pct != null ? "<div class='rank-elo-bar'><div class='rank-elo-fill' style='width:" + pct + "%'></div></div>" : "<span class='muted'>Unrated</span>";
+          var val = r.elo != null ? Math.round(r.elo) : (r.elo_rating != null ? Math.round(r.elo_rating) : "—");
+          return "<div class='rank-elo-row'><span>" + label + "</span>" + bar + "<span>" + esc(val) + "</span></div>";
+        }).join("") || '<p class="muted">No ELO values stored.</p>';
+      }
+      /* Comparative results */
+      var mEl = $("rank-matches");
+      if (mEl) {
+        var matches = ctx.state.comparative && ctx.state.comparative.length ? ctx.state.comparative : (dash.comparative_results || []);
+        mEl.innerHTML = matches.length ? "<ul>" + matches.map(function (m) {
+          return "<li><strong>" + esc(m.winner_label || m.winner) + "</strong> beats <strong>" + esc(m.loser_label || m.loser) + "</strong>" + (m.reason ? " — " + esc(m.reason) : "") + "</li>";
+        }).join("") + "</ul>" : "No tournament beats parsed.";
+      }
+      /* Ranking changes (history events) */
+      var cEl = $("rank-changes");
+      if (cEl) {
+        var evs = ctx.state.rankingChanges && ctx.state.rankingChanges.length ? ctx.state.rankingChanges : (dash.ranking_changes || []);
+        cEl.innerHTML = evs.length ? evs.slice(-20).reverse().map(function (e) {
+          var txt = "Hyp #" + esc(e.hyp_id) + " · " + esc(e.event_type) + " · rank " + esc(e.prev_rank != null ? e.prev_rank : "—") + " → " + esc(e.new_rank != null ? e.new_rank : "—") + " · ELO " + esc(e.prev_elo != null ? Math.round(e.prev_elo) : "—") + " → " + esc(e.new_elo != null ? Math.round(e.new_elo) : "—");
+          return "<li>" + txt + "<time>" + esc(e.created_at || "") + "</time></li>";
+        }).join("") : '<li class="muted">No recorded changes yet — edits/reorders/compare-wins will appear here.</li>';
+      }
+      /* Ranking history snapshots */
+      var hEl = $("rank-history");
+      if (hEl) {
+        var hist = ctx.state.rankingHistory || dash.ranking_history || {};
+        var snaps = hist.snapshots || [];
+        hEl.innerHTML = snaps.length ? snaps.map(function (s) {
+          var lb = (s.leaderboard || []).map(function (b) { return "#" + esc(b.id) + " " + esc((b.title || "").slice(0, 40)) + " (rank " + esc(b.ranking != null ? b.ranking : "—") + ")"; }).join("<br>");
+          return "<div><strong>Iteration " + esc(s.iteration) + "</strong> · top: " + esc(s.top_hypothesis || "—") + "<br>" + (lb || "No leaderboard.") + "</div>";
+        }).join("<hr>") : "No ranking snapshots yet.";
+      }
     }
+
+    /* Ranking correction + reorder wiring */
+    var rankTbl = $("ranking-table");
+    if (rankTbl) rankTbl.addEventListener("click", function (ev) {
+      var b = ev.target.closest("button"); if (!b) return;
+      function apiId(id) { var n = Number(id); return Number.isInteger(n) ? n : null; }
+      if (b.dataset.rankSave) {
+        var hid = apiId(b.dataset.rankSave); if (hid == null) return;
+        var row = b.closest("tr");
+        function val(sel) { var el = row.querySelector(sel); return el ? el.value.trim() : ""; }
+        var payload = {};
+        var rankV = val("[data-rank-pos]"); if (rankV !== "") payload.ranking = Number(rankV);
+        var eloV = val("[data-elo-edit]"); if (eloV !== "") payload.elo_rating = Number(eloV);
+        var survV = val("[data-surv-edit]"); if (survV !== "") payload.survivability = Number(survV);
+        var scoreV = val("[data-score-edit]"); if (scoreV !== "") payload.score = Number(scoreV);
+        if (!Object.keys(payload).length) { rankMsg("Nothing to correct — edit a field first."); return; }
+        rankMsg("Saving correction…");
+        ctx.api.updateHyp(ctx.state.runId, hid, payload).then(function () { rankMsg("Corrected and saved to SQLite (change recorded)."); ctx.refresh(); })
+          .catch(function (err) { rankMsg("Correction failed: " + err.message); });
+      }
+      if (b.dataset.rankSelect) {
+        var hid2 = apiId(b.dataset.rankSelect); if (hid2 == null) return;
+        ctx.api.selectHyp(ctx.state.runId, hid2).then(function (d) { rankMsg("Selected as winner: " + (d.top_hypothesis || "") + " — now available to Crow."); ctx.refresh(); })
+          .catch(function (err) { rankMsg("Select failed: " + err.message); });
+      }
+    });
+    var reorderBtn = $("rank-reorder-btn");
+    if (reorderBtn) reorderBtn.addEventListener("click", function () {
+      var inputs = Array.prototype.slice.call(document.querySelectorAll("[data-rank-pos]"));
+      if (!inputs.length) return;
+      var order = inputs.map(function (el) { return { id: Number(el.dataset.rankPos), pos: Number(el.value) || 9999 }; })
+        .sort(function (a, b) { return a.pos - b.pos; }).map(function (x) { return x.id; });
+      rankMsg("Applying order…");
+      ctx.api.reorder(ctx.state.runId, order).then(function () { rankMsg("Leaderboard reordered and saved to SQLite."); ctx.refresh(); })
+        .catch(function (err) { rankMsg("Reorder failed: " + err.message); });
+    });
 
     /** ---------- crow / falcon + finch ---------- */
     function renderCrowFalcon() {

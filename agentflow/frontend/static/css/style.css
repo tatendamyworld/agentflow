@@ -206,3 +206,13 @@ dialog label{display:block;margin:.5rem 0 .25rem;color:var(--muted);font-size:.8
 .hyp-card.is-archived{opacity:.6;border-style:dashed}
 .badge-archived{color:var(--faint);border-color:var(--border)}
 .badge-active{color:var(--ready);border-color:#0369a1}
+
+/* PHASE 8 — Ranking Dashboard */
+.rank-hero{background:#0b1526;border:1px solid var(--border);border-radius:var(--radius-sm);padding:.7rem;margin-bottom:.9rem}
+.rank-elo{display:flex;flex-direction:column;gap:.35rem;margin:.4rem 0 .9rem}
+.rank-elo-row{display:grid;grid-template-columns:220px 1fr 60px;gap:.6rem;align-items:center;font-size:.82rem;color:var(--muted)}
+.rank-elo-bar{height:14px;background:#1e293b;border-radius:999px;overflow:hidden;border:1px solid var(--border)}
+.rank-elo-fill{height:100%;background:linear-gradient(90deg,var(--ready),var(--purple))}
+.rank-matches{font-size:.85rem;display:flex;flex-direction:column;gap:.3rem;margin-bottom:.9rem}
+.rank-matches li{list-style:none}
+.rank-correct-input{width:70px;background:#0a1220;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:.25rem}

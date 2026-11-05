@@ -51,6 +51,29 @@ CREATE TABLE IF NOT EXISTS run_meta (
   description TEXT,
   updated_at TEXT
 );
+CREATE TABLE IF NOT EXISTS ranking_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  iteration INTEGER NOT NULL DEFAULT 1,
+  hyp_id INTEGER,
+  event_type TEXT NOT NULL,
+  prev_rank INTEGER, new_rank INTEGER,
+  prev_elo REAL, new_elo REAL,
+  prev_score REAL, new_score REAL,
+  created_at TEXT,
+  FOREIGN KEY (run_id) REFERENCES runs(id)
+);
+CREATE TABLE IF NOT EXISTS ranking_matches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  iteration INTEGER NOT NULL DEFAULT 1,
+  winner_label TEXT, loser_label TEXT,
+  winner_hyp_id INTEGER, loser_hyp_id INTEGER,
+  reason TEXT, parsed_at TEXT,
+  FOREIGN KEY (run_id) REFERENCES runs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_ranking_events_run ON ranking_events(run_id, iteration);
+CREATE INDEX IF NOT EXISTS idx_ranking_matches_run ON ranking_matches(run_id, iteration);
 CREATE INDEX IF NOT EXISTS idx_hypotheses_run
   ON hypotheses(run_id, iteration);
 """
@@ -212,6 +235,7 @@ def update_hypothesis(project, hyp_id, fields):
         allowed["is_survivor"] = 1 if allowed["is_survivor"] else 0
     if not allowed:
         return get_hypothesis(project, hyp_id)
+    before = get_hypothesis(project, hyp_id)
     assignments = ", ".join(f"{c}=?" for c in allowed)
     con = _connect(project)
     try:
@@ -224,7 +248,19 @@ def update_hypothesis(project, hyp_id, fields):
             return None
     finally:
         con.close()
-    return get_hypothesis(project, hyp_id)
+    after = get_hypothesis(project, hyp_id)
+    # ranking history: record only when scoring fields changed
+    if before is not None and after is not None:
+        changed = any(before.get(f) != after.get(f) for f in ("ranking", "elo_rating", "score", "survivability", "status"))
+        if changed:
+            try:
+                _record_event(project, before.get("run_id"), before.get("iteration"),
+                              hyp_id, "EDIT", before.get("ranking"), after.get("ranking"),
+                              before.get("elo_rating"), after.get("elo_rating"),
+                              before.get("score"), after.get("score"))
+            except Exception:
+                pass
+    return after
 
 
 # ---------------------------------------------------------------------------
@@ -282,15 +318,16 @@ def parse_hypotheses_from_text(text, iteration=1):
     for m in _HYP_LINE_RE.finditer(str(text)):
         label = m.group(1).upper()
         body = (m.group(2) or "").strip()
+        # Skip tournament lines like "E1 beats E2: reason" BEFORE marking
+        # the label seen — otherwise beats lines consume E1/E2 and the real
+        # evolved-candidate list below is silently dropped.
+        if re.match(r"beats\b", body, re.IGNORECASE) or " beats " in body.lower():
+            continue
         if label in seen:
             continue
         seen.add(label)
         # Skip lines that are clearly not a hypothesis statement.
         if not body and label == (winner or ""):
-            continue
-        # Skip tournament lines like "E1 beats E2: reason" — not a
-        # hypothesis statement.
-        if re.match(r"beats\b", body, re.IGNORECASE) or " beats " in body.lower():
             continue
         title = body[:160] if body else label
         origin = "generation" if label.startswith("H") else "evolution"
@@ -478,3 +515,180 @@ def restore_hypothesis(project, hyp_id):
     if _row_to_dict(hyp).get("status") != "ARCHIVED":
         raise ValueError(f"hypothesis {hyp_id} is not archived")
     return update_hypothesis(project, hyp_id, {"status": "ACTIVE", "is_survivor": False})
+
+
+# ---------------------------------------------------------------------------
+# Ranking Dashboard (PHASE 8): matches, history, leaderboard, reorder
+# ---------------------------------------------------------------------------
+
+_BEATS_RE = re.compile(r"(?i)(H\d+|E\d+)\s+beats\s+(H\d+|E\d+)\s*(?:[:\-—]\s*(.*))?")
+_WINNER_LABEL_RE = re.compile(r"(?i)top\s+hypothesis\s*[:\-]\s*(?:(H\d+|E\d+)\b\s*[\.\-]?\s*)?(.*)")
+
+def parse_tournament_results(text):
+    """Parse 'X beats Y: reason' lines from Ranking output. No fabrication: honest [] on none."""
+    if not text or not str(text).strip():
+        return []
+    out = []
+    for m in _BEATS_RE.finditer(str(text)):
+        winner = m.group(1).upper()
+        loser = m.group(2).upper()
+        reason = (m.group(3) or "").strip()
+        out.append({"winner_label": winner, "loser_label": loser, "reason": reason,
+                    "winner": winner, "loser": loser})
+    # dedupe preserve order
+    seen = set()
+    uniq = []
+    for x in out:
+        k = (x["winner_label"], x["loser_label"], x["reason"])
+        if k in seen:
+            continue
+        seen.add(k); uniq.append(x)
+    return uniq
+
+
+def _record_event(project, run_id, iteration, hyp_id, event_type, prev_rank, new_rank, prev_elo, new_elo, prev_score, new_score):
+    if run_id is None:
+        return None
+    con = _connect(project)
+    try:
+        cur = con.execute(
+            "INSERT INTO ranking_events(run_id,iteration,hyp_id,event_type,prev_rank,new_rank,prev_elo,new_elo,prev_score,new_score,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (run_id, iteration or 1, hyp_id, event_type, prev_rank, new_rank, prev_elo, new_elo, prev_score, new_score, _now()),
+        )
+        con.commit()
+        return cur.lastrowid
+    finally:
+        con.close()
+
+
+def list_ranking_events(project, run_id, iteration=None):
+    con = _connect(project)
+    try:
+        if iteration is None:
+            rows = con.execute("SELECT * FROM ranking_events WHERE run_id=? ORDER BY id", (run_id,)).fetchall()
+        else:
+            rows = con.execute("SELECT * FROM ranking_events WHERE run_id=? AND iteration=? ORDER BY id", (run_id, iteration)).fetchall()
+    finally:
+        con.close()
+    return [dict(r) for r in rows]
+
+
+def list_ranking_matches(project, run_id, iteration=None):
+    con = _connect(project)
+    try:
+        if iteration is None:
+            rows = con.execute("SELECT * FROM ranking_matches WHERE run_id=? ORDER BY id", (run_id,)).fetchall()
+        else:
+            rows = con.execute("SELECT * FROM ranking_matches WHERE run_id=? AND iteration=? ORDER BY id", (run_id, iteration)).fetchall()
+    finally:
+        con.close()
+    return [dict(r) for r in rows]
+
+
+def sync_ranking_matches(project, run_id, iteration, ranking_output, hypotheses=None):
+    """Persist parsed 'X beats Y' results once (idempotent). Resolves labels to hyp ids when possible."""
+    if list_ranking_matches(project, run_id, iteration=iteration):
+        return list_ranking_matches(project, run_id, iteration=iteration)
+    parsed = parse_tournament_results(ranking_output)
+    if not parsed:
+        return []
+    hyps = hypotheses or list_hypotheses(project, run_id, iteration=iteration)
+    by_label = {}
+    for h in hyps:
+        lab = _label_of(h.get("title") or "")
+        if lab:
+            by_label[lab] = h["id"]
+    con = _connect(project)
+    try:
+        for m in parsed:
+            con.execute("INSERT INTO ranking_matches(run_id,iteration,winner_label,loser_label,winner_hyp_id,loser_hyp_id,reason,parsed_at) VALUES(?,?,?,?,?,?,?,?)",
+                        (run_id, iteration or 1, m["winner_label"], m["loser_label"], by_label.get(m["winner_label"]), by_label.get(m["loser_label"]), m["reason"], _now()))
+        con.commit()
+    finally:
+        con.close()
+    return list_ranking_matches(project, run_id, iteration=iteration)
+
+
+def reorder_hypotheses(project, run_id, iteration, ordered_ids):
+    """Manual correction: assign ranking=1..n in given order, record events."""
+    if not ordered_ids:
+        raise ValueError("order must not be empty")
+    hyps = {h["id"]: h for h in list_hypotheses(project, run_id, iteration=iteration)}
+    for hid in ordered_ids:
+        if hid not in hyps:
+            raise ValueError(f"hypothesis {hid} not in run {run_id} iteration {iteration}")
+    updated = []
+    for idx, hid in enumerate(ordered_ids, start=1):
+        before = hyps[hid]
+        if before.get("ranking") != idx:
+            after = update_hypothesis(project, hid, {"ranking": idx})
+            # update_hypothesis already recorded EDIT event; add REORDER tag via extra event
+            _record_event(project, run_id, iteration, hid, "REORDER", before.get("ranking"), idx, before.get("elo_rating"), after.get("elo_rating") if after else None, before.get("score"), after.get("score") if after else None)
+            updated.append(after)
+        else:
+            updated.append(before)
+    return updated
+
+
+def get_leaderboard(project, run_id, iteration):
+    """Leaderboard sorted by stored ranking (then ELO desc, surv desc). Archived excluded."""
+    rows_h = [h for h in list_hypotheses(project, run_id, iteration=iteration) if _row_to_dict(h).get("status") != "ARCHIVED"]
+    rows_h.sort(key=lambda h: (
+        h.get("ranking") is None, h.get("ranking") or 9999,
+        -(h.get("elo_rating") or -1), -(h.get("survivability") or -1)))
+    # elo viz scaling among leaderboard (actual values, min-max among rated)
+    rated = [h["elo_rating"] for h in rows_h if h.get("elo_rating") is not None]
+    lo, hi = (min(rated), max(rated)) if rated else (None, None)
+    board = []
+    for i, h in enumerate(rows_h, start=1):
+        elo = h.get("elo_rating")
+        if elo is None:
+            pct = None
+        elif lo == hi:
+            pct = 100.0
+        else:
+            pct = round((float(elo) - lo) / (hi - lo) * 100, 1)
+        # latest rank change from history
+        evs = [e for e in list_ranking_events(project, run_id, iteration=iteration) if e.get("hyp_id") == h["id"]]
+        change = None
+        if evs:
+            last = evs[-1]
+            if last.get("prev_rank") is not None and last.get("new_rank") is not None:
+                change = int(last["prev_rank"]) - int(last["new_rank"])
+        item = _row_to_dict(h)
+        item["leaderboard_rank"] = i if h.get("ranking") is None else h.get("ranking")
+        item["rank_change"] = change
+        item["elo_pct"] = pct
+        item["elo_min"] = lo
+        item["elo_max"] = hi
+        board.append(item)
+    return board
+
+
+def get_ranking_history(project, run_id):
+    """Ranking history: per-iteration execution snapshot + ranked lists + change events."""
+    # iterations present in executions
+    iters = set()
+    try:
+        for e in db.get_executions(run_id, project=project):
+            iters.add(e.get("iteration"))
+    except Exception:
+        pass
+    iters = sorted([i for i in iters if i is not None])
+    snaps = []
+    for it in iters:
+        rex = None
+        try:
+            for e in db.get_executions(run_id, iteration=it, project=project):
+                if e.get("agent") == "ranking":
+                    rex = e
+        except Exception:
+            pass
+        board = get_leaderboard(project, run_id, it) if it else []
+        snaps.append({"iteration": it,
+                      "output": (rex or {}).get("output") if rex else None,
+                      "top_hypothesis": (rex or {}).get("top_hypothesis") if rex else None,
+                      "leaderboard": [{k: b.get(k) for k in ("id", "title", "elo_rating", "survivability", "score", "ranking", "status", "leaderboard_rank", "rank_change", "created_at")} for b in board]})
+    events = list_ranking_events(project, run_id)
+    matches = list_ranking_matches(project, run_id)
+    return {"snapshots": snaps, "events": events, "matches": matches}

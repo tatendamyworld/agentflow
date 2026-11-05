@@ -7,7 +7,7 @@
 
   var state = {
     runId: null, run: null, executions: [], finchRuns: [], consensus: null,
-    hypotheses: [], ranking: [], runs: [], selectedAgent: "supervisor", online: false
+    hypotheses: [], ranking: [], rankingDashboard: null, eloVisual: [], rankingChanges: [], comparative: [], winning: null, rankingHistory: null, runs: [], selectedAgent: "supervisor", online: false
   };
 
   /* ---------- fetch helpers ---------- */
@@ -79,6 +79,8 @@
     runHistory: function (id) { return req("/api/runs/" + encodeURIComponent(id) + "/history"); },
     saveTop: function (id, text) { return req("/api/runs/" + encodeURIComponent(id) + "/save-top", { method: "POST", body: { top_hypothesis: text } }).catch(function () { return req("/api/runs/" + encodeURIComponent(id) + "/save", { method: "POST", body: { agent: "ranking", top_hypothesis: text, output: text } }); }); },
     finch: function (id, responses) { return req("/api/runs/" + encodeURIComponent(id) + "/finch", { method: "POST", body: { responses: responses } }); },
+    reorder: function (id, order) { return req("/api/runs/" + encodeURIComponent(id) + "/ranking/reorder", { method: "POST", body: { order: order } }); },
+    rankingHistory: function (id) { return req("/api/runs/" + encodeURIComponent(id) + "/ranking/history"); },
     createHyp: function (id, payload) { return req("/api/runs/" + encodeURIComponent(id) + "/hypotheses", { method: "POST", body: payload }); },
     updateHyp: function (id, hypId, payload) { return req("/api/runs/" + encodeURIComponent(id) + "/hypotheses/" + encodeURIComponent(hypId), { method: "PATCH", body: payload }); },
     importHyps: function (id, payload) { return req("/api/runs/" + encodeURIComponent(id) + "/hypotheses/import", { method: "POST", body: payload || {} }); },
@@ -114,6 +116,14 @@
     if (d && Array.isArray(d.hypotheses)) state.hypotheses = d.hypotheses;
     if (d && Array.isArray(d.ranking)) state.ranking = d.ranking;
     if (d && Array.isArray(d.runs)) state.runs = d.runs;
+    if (d && typeof d === "object" && (d.elo_visual || d.ranking_changes || d.winning_hypothesis || d.ranking_history)) {
+      state.rankingDashboard = d;
+      state.eloVisual = d.elo_visual || [];
+      state.rankingChanges = d.ranking_changes || [];
+      state.comparative = d.comparative_results || [];
+      state.winning = d.winning_hypothesis || null;
+      state.rankingHistory = d.ranking_history || null;
+    }
   }
 
   function loadOptional(id) {
@@ -122,7 +132,13 @@
       opt("/api/runs/" + encodeURIComponent(id) + "/ranking")
     ]).then(function (pair) {
       if (pair[0]) state.hypotheses = Array.isArray(pair[0].hypotheses) ? pair[0].hypotheses : pair[0];
-      if (pair[1]) state.ranking = Array.isArray(pair[1].ranking) ? pair[1].ranking : pair[1];
+      if (pair[1]) { state.ranking = Array.isArray(pair[1].ranking) ? pair[1].ranking : pair[1];
+        state.rankingDashboard = pair[1];
+        state.eloVisual = pair[1].elo_visual || [];
+        state.rankingChanges = pair[1].ranking_changes || [];
+        state.comparative = pair[1].comparative_results || [];
+        state.winning = pair[1].winning_hypothesis || null;
+        state.rankingHistory = pair[1].ranking_history || null; }
     });
   }
 

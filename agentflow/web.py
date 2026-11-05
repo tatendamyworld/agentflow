@@ -285,9 +285,22 @@ def create_app(project="."):
         return [hypothesis_payload(h) for h in rows]
 
     def ranked_payload(run):
-        items = [h for h in hypotheses_for(run) if h.get("status") != "ARCHIVED"]
-        items = sorted(items, key=lambda h: (
-            h.get("ranking") is None, h.get("ranking") or 0))
+        # Leaderboard: stored ranking + elo/surv tiebreak, elo_pct, rank_change
+        # Ensure Ranking-output parse is synced first (first read creates rows)
+        try:
+            hypotheses_for(run)
+        except Exception:
+            pass
+        try:
+            board = backend_models.get_leaderboard(project, run["id"], run["current_iteration"])
+            items = [hypothesis_payload(h) for h in board]
+        except Exception:
+            items = [h for h in hypotheses_for(run) if h.get("status") != "ARCHIVED"]
+            items = sorted(items, key=lambda h: (
+                h.get("ranking") is None, h.get("ranking") or 0))
+            for i, h in enumerate(items, start=1):
+                if h.get("ranking") is None:
+                    h["ranking"] = i
         ranked = []
         for i, h in enumerate(items, start=1):
             row = dict(h)
@@ -1261,15 +1274,108 @@ def create_app(project="."):
         exes = current_exes(run)
         ranking_exe = next((e for e in exes if e["agent"] == "ranking"), None)
         ranked = ranked_payload(run)
+        # ELO visualization from actual stored values (unrated -> pct null)
+        elo_visual = []
+        for h in ranked:
+            elo = h.get("elo_rating")
+            elo_visual.append({"id": h.get("id"), "label": h.get("label"),
+                               "title": h.get("title"), "elo": h.get("elo_rating"),
+                               "elo_rating": h.get("elo_rating"), "elo_pct": h.get("elo_pct"),
+                               "rank": h.get("rank")})
+        # comparative results from Ranking tournament lines (persisted)
+        try:
+            matches = backend_models.sync_ranking_matches(project, run_id, run["current_iteration"],
+                                                          (ranking_exe or {}).get("output") or "")
+        except Exception:
+            matches = []
+        # ranking changes + history
+        try:
+            history = backend_models.get_ranking_history(project, run_id)
+        except Exception:
+            history = {"snapshots": [], "events": [], "matches": matches}
+        events = history.get("events", [])
+        # winning hypothesis: SELECTED row else top_hypothesis text
+        winning = None
+        for h in ranked:
+            if h.get("status") == "TOP" or h.get("status") == "SELECTED":
+                winning = h
+                break
+        top_text = top_hypothesis_for(run, exes) or None
+        if winning is None and top_text:
+            winning = {"title": top_text, "top_hypothesis": top_text}
+        elif winning is not None:
+            winning = dict(winning)
+            winning["top_hypothesis"] = top_text or winning.get("title")
+        # Crow availability: prompt context actually contains top (not placeholder)
+        crow_ok = bool(top_text)
         return jsonify({
             "run_id": run_id, "agent": "ranking",
             "ranking": ranked, "ranked": ranked, "hypotheses": ranked,
+            "leaderboard": ranked,
+            "elo_visual": elo_visual,
+            "ranking_changes": events,
+            "leaderboard_changes": events,
+            "comparative_results": matches,
+            "comparative": matches,
+            "winning_hypothesis": winning,
+            "winner": winning,
+            "top_hypothesis": top_text,
+            "crow_available": crow_ok,
+            "crow": {"available": crow_ok, "top_hypothesis": top_text},
+            "ranking_history": history,
+            "history": history,
             "ranking_output": (ranking_exe or {}).get("output"),
             "output": (ranking_exe or {}).get("output"),
             "prompt": (ranking_exe or {}).get("prompt"),
-            "top_hypothesis": top_hypothesis_for(run, exes) or None,
             "execution": ranking_exe,
+            "correction_hint": "Manual correction: PATCH /hypotheses/<id> {ranking|elo_rating|score|survivability} or POST /ranking/reorder {order:[ids]}. All changes recorded in ranking_changes.",
         })
+
+    @app.route("/api/runs/<run_id>/ranking/reorder", methods=["POST"])
+    def ranking_reorder(run_id):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        data = body()
+        if data is None:
+            return err("request body must be a JSON object")
+        order = data.get("order") or data.get("ids") or data.get("ordered_ids")
+        if not isinstance(order, list) or not order:
+            return err("provide {order: [hypothesis ids in new rank order]}")
+        cleaned = []
+        for x in order:
+            if isinstance(x, bool) or not isinstance(x, int):
+                return err("order must be a list of hypothesis ids (integers)")
+            cleaned.append(x)
+        it = data.get("iteration", run["current_iteration"])
+        if isinstance(it, bool) or not isinstance(it, int) or it < 1:
+            return err("iteration must be a positive integer")
+        try:
+            updated = backend_models.reorder_hypotheses(project, run_id, it, cleaned)
+        except ValueError as exc:
+            return err(str(exc), 400)
+        ranked = ranked_payload(db.get_run(run_id, project))
+        return jsonify(run_id=run_id, ranking=ranked, ranked=ranked, hypotheses=ranked,
+                       reordered=[u["id"] for u in updated])
+
+    @app.route("/api/runs/<run_id>/ranking/history", methods=["GET"])
+    def ranking_history(run_id):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        try:
+            hist = backend_models.get_ranking_history(project, run_id)
+        except Exception as exc:
+            return err(str(exc), 500)
+        # ensure matches synced for current iteration
+        exes = current_exes(run)
+        ranking_exe = next((e for e in exes if e["agent"] == "ranking"), None)
+        try:
+            backend_models.sync_ranking_matches(project, run_id, run["current_iteration"], (ranking_exe or {}).get("output") or "")
+            hist = backend_models.get_ranking_history(project, run_id)
+        except Exception:
+            pass
+        return jsonify(run_id=run_id, **hist)
 
     # -- timeline / export / loop / diff --------------------------------------
 

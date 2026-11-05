@@ -156,16 +156,37 @@
       <div id="hyp-compare" class="hyp-compare" hidden aria-live="polite"></div>
     </section>
 
-    <!-- Ranking -->
+    <!-- Ranking — PHASE 8 Ranking Dashboard -->
     <section id="ranking" class="panel" aria-labelledby="rank-title">
-      <div class="panel-head"><h2 id="rank-title">Ranking</h2><span id="rank-note" class="muted small"></span></div>
+      <div class="panel-head">
+        <h2 id="rank-title">Ranking Dashboard</h2>
+        <div class="panel-actions">
+          <button type="button" id="rank-reorder-btn" class="btn btn-ghost btn-small">Apply new order</button>
+          <span id="rank-note" class="muted small"></span>
+        </div>
+      </div>
+      <p id="rank-msg" class="muted small" role="status" aria-live="polite"></p>
+      <div class="rank-hero" id="rank-winner" aria-live="polite">
+        <h3 class="insp-h">Winning hypothesis</h3>
+        <p id="rank-winner-text">No winner yet — select in Hypothesis Laboratory or save Ranking output with “Top hypothesis: …”. Winner will appear here and be available to Crow.</p>
+        <p id="rank-crow" class="muted small"></p>
+      </div>
+      <h3 class="insp-h">Leaderboard (stored results only)</h3>
       <div class="table-wrap">
         <table class="table" id="ranking-table">
-          <caption class="muted small">Ranked hypotheses (from Ranking agent output when available)</caption>
-          <thead><tr><th scope="col">#</th><th scope="col">Hypothesis</th><th scope="col">Score</th><th scope="col">Source</th><th scope="col">Status</th></tr></thead>
-          <tbody><tr><td colspan="5" class="muted">No ranking data yet.</td></tr></tbody>
+          <caption class="muted small">Edit Rank / ELO / Survivability / Score to correct parsed data — changes are saved to SQLite and recorded.</caption>
+          <thead><tr><th scope="col">Rank</th><th scope="col">Hypothesis</th><th scope="col">ELO</th><th scope="col">Survivability</th><th scope="col">Score</th><th scope="col">Source</th><th scope="col">Status</th><th scope="col">Δ</th><th scope="col">Correct</th></tr></thead>
+          <tbody><tr><td colspan=9 class="muted">No ranking data yet.</td></tr></tbody>
         </table>
       </div>
+      <h3 class="insp-h">ELO visualisation</h3>
+      <div id="rank-elo" class="rank-elo"></div>
+      <h3 class="insp-h">Comparative results (Ranking tournament)</h3>
+      <div id="rank-matches" class="rank-matches muted">No tournament “beats” lines parsed yet.</div>
+      <h3 class="insp-h">Ranking changes</h3>
+      <ol id="rank-changes" class="timeline"><li class="muted">No recorded changes yet.</li></ol>
+      <h3 class="insp-h">Ranking history</h3>
+      <div id="rank-history" class="muted small">No history yet.</div>
     </section>
 
     <!-- Crow / Falcon -->

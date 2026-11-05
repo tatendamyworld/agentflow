@@ -153,3 +153,20 @@ Operations (real API + dashboard cards):
 Validation: surv 0–10, ELO 0–4000, status enum, agent-or-`manual`; invalid → 400 (no storage).
 
 Tests: `tests/test_hypothesis_lab.py` (8 tests). Full suite (`pytest tests/`): 70 passed.
+
+## PHASE 8 — Ranking Dashboard
+
+Ranking agent results from stored SQLite only (no demo values):
+
+- **Leaderboard** — `GET /ranking` returns `leaderboard` sorted by stored `ranking` (+ELO/surv tiebreak); ranks are editable, archived excluded.
+- **ELO visualisation** — `elo_visual` (id/label/elo/elo_pct/rank); bars scaled from actual stored `elo_rating` min-max; unrated shown as “Unrated” (pct=null), never fabricated.
+- **Ranking changes** — `ranking_events` table records every rank/ELO/score/surv/status edit (`EDIT`), bulk reorder (`REORDER`), compare-win ELO updates; exposed as `ranking_changes` with prev→new + Δ in leaderboard.
+- **Comparative results** — `ranking_matches` table parses Ranking “X beats Y: reason” tournament lines (persisted, idempotent); shown as tournament list.
+- **Winning hypothesis** — `winning_hypothesis` (SELECTED row else stored top text) + `crow_available`; Crow preview verifies `{{TOP_HYPOTHESIS}}` replaced from SQLite.
+- **Ranking history** — `GET /ranking/history` per-iteration snapshots (output/top/leaderboard) + events + matches.
+- **Manual correction** — `PATCH /hypotheses/:id` {ranking|elo_rating|score|survivability} per row, `POST /ranking/reorder` {order:[ids]} for bulk order; both persisted + recorded.
+- Parser fix: “beats” lines no longer consume H/E labels, so E1/E2 evolved candidates parse correctly.
+
+Dashboard: winner hero, leaderboard with inline correction, ELO bars, tournament list, changes timeline, history snapshots — all polled from `/ranking`.
+
+Tests: `tests/test_ranking_dashboard.py` (9 tests). Full suite (`pytest tests/`): 79 passed.
