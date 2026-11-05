@@ -159,7 +159,7 @@ class TestPromptEngine(OpsTestBase):
         r = self.client.post(f"/api/runs/{rid}/prompt-preview", json={"agent": "supervisor"})
         self.assertEqual(r.status_code, 200)
         r = self.client.get(f"/api/runs/{rid}/execution/supervisor")
-        self.assertEqual(r.get_json()["status"], "PENDING")
+        self.assertIn(r.get_json()["status"], ("PENDING", "WAITING_FOR_INPUT"))
 
 
 class TestInspectorBackend(OpsTestBase):
@@ -224,7 +224,7 @@ class TestSubmitSaveRetryHistory(OpsTestBase):
         self.client.post(f"/api/runs/{rid}/save", json={"agent": "supervisor", "output": "first attempt"})
         r = self.client.post(f"/api/runs/{rid}/retry", json={"agent": "supervisor"})
         self.assertEqual(r.status_code, 200, r.get_json())
-        self.assertEqual(r.get_json()["execution"]["status"], "PENDING")
+        self.assertIn(r.get_json()["execution"]["status"], ("PENDING", "WAITING_FOR_INPUT"))
         self.assertIn("prompt", r.get_json())
         e = db.get_execution(rid, "supervisor", project=self.project)
         self.assertIsNone(e["output"])

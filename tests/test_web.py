@@ -91,7 +91,8 @@ class TestWeb(WebTestBase):
                              json={"agent": "supervisor"})
         self.assertEqual(r.status_code, 200)
         self.assertIn("Build X", r.get_json()["prompt"])
-        self.assertEqual(r.get_json()["execution"]["status"], "PENDING")
+        self.assertIn(r.get_json()["execution"]["status"], ("PENDING", "WAITING_FOR_INPUT"))  # P6: generate -> WAITING_FOR_INPUT, never COMPLETED
+        self.assertNotEqual(r.get_json()["execution"]["status"], "COMPLETED")
         r = self.client.get(f"/api/runs/{rid}/execution/supervisor")
         self.assertIn("Build X", r.get_json()["prompt"])
         # agent_id alias works too

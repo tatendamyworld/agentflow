@@ -13,7 +13,7 @@
     { id: "falcon", name: "FALCON", order: 8 },
     { id: "finch", name: "FINCH", order: 9 }
   ];
-  var COLORS = { pending: "#64748b", ready: "#38bdf8", waiting: "#fbbf24", completed: "#34d399", failed: "#f87171", selected: "#a78bfa" };
+  var COLORS = { pending: "#64748b", ready: "#38bdf8", waiting: "#fbbf24", completed: "#34d399", failed: "#f87171", blocked: "#fb923c", archived: "#475569", selected: "#a78bfa" };
 
   function el(tag, attrs, parent, text) {
     var n = document.createElementNS(NS, tag);
@@ -25,8 +25,10 @@
 
   function normalizeStatus(raw, isNextPending) {
     var s = String(raw || "PENDING").toUpperCase();
-    if (s === "COMPLETED" || s === "DONE" || s === "SUCCESS") return "completed";
+    if (s === "COMPLETED" || s === "DONE" || s === "SUCCESS" || s === "CONSENSUS_REACHED") return "completed";
     if (s === "FAILED" || s === "ERROR" || s === "INVALID") return "failed";
+    if (s === "BLOCKED" || s === "SPLIT") return "blocked";
+    if (s === "ARCHIVED") return "archived";
     if (s === "WAITING" || s === "WAITING_FOR_INPUT" || s === "WAITING_FOR_TOP_HYPOTHESIS" || s === "WAITING_FOR_FINCH") return "waiting";
     if (s === "READY" || s === "RUNNING" || s === "IN_PROGRESS" || s === "CREATED") return "ready";
     if (s === "PENDING" || s === "QUEUED") return isNextPending ? "ready" : "pending";
@@ -51,7 +53,7 @@
     for (var i = 0; i < AGENTS.length; i++) {
       var e0 = byId[AGENTS[i].id];
       var st0 = e0 ? String(e0.status || "PENDING").toUpperCase() : "PENDING";
-      if (st0 === "PENDING" || st0 === "FAILED") { nextId = AGENTS[i].id; break; }
+      if (st0 === "PENDING" || st0 === "FAILED" || st0 === "BLOCKED" || st0 === "READY" || st0 === "WAITING_FOR_INPUT" || st0 === "WAITING") { nextId = AGENTS[i].id; break; }
     }
 
     /* edges first (under nodes) */

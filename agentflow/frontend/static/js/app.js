@@ -78,7 +78,9 @@
     agentHistory: function (id, agent) { return req("/api/runs/" + encodeURIComponent(id) + "/agent/" + encodeURIComponent(agent) + "/history"); },
     runHistory: function (id) { return req("/api/runs/" + encodeURIComponent(id) + "/history"); },
     saveTop: function (id, text) { return req("/api/runs/" + encodeURIComponent(id) + "/save-top", { method: "POST", body: { top_hypothesis: text } }).catch(function () { return req("/api/runs/" + encodeURIComponent(id) + "/save", { method: "POST", body: { agent: "ranking", top_hypothesis: text, output: text } }); }); },
-    finch: function (id, responses) { return req("/api/runs/" + encodeURIComponent(id) + "/finch", { method: "POST", body: { responses: responses } }); }
+    finch: function (id, responses) { return req("/api/runs/" + encodeURIComponent(id) + "/finch", { method: "POST", body: { responses: responses } }); },
+    archive: function (id) { return req("/api/runs/" + encodeURIComponent(id) + "/archive", { method: "POST", body: {} }); },
+    runStatus: function (id) { return req("/api/runs/" + encodeURIComponent(id) + "/status"); },
   };
 
   /* ---------- error / poll UI ---------- */

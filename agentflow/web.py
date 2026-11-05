@@ -28,6 +28,10 @@ from agentflow.consensus import (
     evaluate_consensus, parse_finch_vote, validate_finch_responses,
 )
 try:
+    from agentflow import workflow as _wf
+except ImportError:
+    _wf = None
+try:
     from agentflow import ops as _ops
 except ImportError:
     _ops = None
@@ -112,12 +116,24 @@ def create_app(project="."):
             return run, None
         return None, err(f"run {run_id} not found", 404)
 
-    def run_payload(run):
+    def run_payload(run, exes=None):
         meta = backend_models.get_run_meta(project, run["id"]) or {}
         payload = dict(run)
         payload["run_id"] = run["id"]
         payload["name"] = meta.get("name")
         payload["description"] = meta.get("description")
+        # canonical workflow state: stored + derived (dashboard reflects DB truth)
+        try:
+            prog = db.progress_for(run["id"], project) if _wf is not None else None
+            if prog:
+                payload["derived_status"] = prog["status"]
+                payload["canonical_status"] = prog["status"]
+                payload["progress"] = prog["percentage"]
+                payload["percentage"] = prog["percentage"]
+                payload["completed_count"] = prog["completed"]
+                payload["total_agents"] = prog["total"]
+        except Exception:
+            pass
         return payload
 
     def current_exes(run):
@@ -174,12 +190,17 @@ def create_app(project="."):
         return ""
 
     def next_agent(exes):
+        if _wf is not None:
+            return _wf.next_agent(exes)
         for e in exes:
-            if e["status"] in ("PENDING", "WAITING", "FAILED"):
+            if e["status"] in ("PENDING", "READY", "WAITING", "WAITING_FOR_INPUT", "FAILED", "BLOCKED"):
                 return e["agent"]
         return None
 
     def progress_for(run, exes):
+        if _wf is not None:
+            prog = _wf.compute_progress(run, exes)
+            return prog["completed"], prog["total"], prog["percentage"]
         total = len(exes) or len(AGENT_IDS)
         done = sum(1 for e in exes if e["status"] == "COMPLETED")
         pct = round(done / total * 100, 1) if total else 0.0
@@ -394,8 +415,18 @@ def create_app(project="."):
 
     @app.route("/api/runs", methods=["GET"])
     def list_runs():
-        runs = [run_payload(r) for r in db.list_runs(project)]
-        return jsonify(runs=runs)
+        out = []
+        for r in db.list_runs(project):
+            payload = run_payload(r)
+            exes = current_exes(r)
+            if _wf is not None:
+                prog = _wf.compute_progress(r, exes)
+                payload["progress"] = prog["percentage"]
+                payload["completed"] = prog["completed"]
+                payload["total"] = prog["total"]
+                payload["next_agent"] = prog["next_agent"]
+            out.append(payload)
+        return jsonify(runs=out)
 
     @app.route("/api/runs", methods=["POST"])
     def create_run():
@@ -431,11 +462,13 @@ def create_app(project="."):
         if failure:
             return failure
         exes = current_exes(run)
-        payload = run_payload(run)
+        payload = run_payload(run, exes)
+        prog = _wf.compute_progress(run, exes) if _wf is not None else {}
         return jsonify({
             **payload, "run": payload, "executions": exes,
             "finch_runs": db.get_finch_runs(run_id, project=project),
             "consensus": consensus_for(run),
+            "progress": prog, "derived_status": prog.get("status") if prog else run.get("status"),
         })
 
     @app.route("/api/runs/<run_id>/status", methods=["GET"])
@@ -444,21 +477,45 @@ def create_app(project="."):
         if failure:
             return failure
         exes = current_exes(run)
-        done, total, pct = progress_for(run, exes)
-        payload = run_payload(run)
+        if _wf is not None:
+            prog = _wf.compute_progress(run, exes, consensus=consensus_for(run))
+        else:
+            done, total, pct = progress_for(run, exes)
+            prog = {"completed": done, "total": total, "percentage": pct,
+                    "next_agent": next_agent(exes), "status": run["status"]}
+        payload = run_payload(run, exes)
         return jsonify({
-            "run_id": run_id, "id": run_id, "status": run["status"],
-            "run_status": run["status"], "progress": pct, "percentage": pct,
-            "percent": pct, "completed": done, "completed_count": done,
-            "total": total, "total_agents": total,
+            "run_id": run_id, "id": run_id, "status": prog["status"],
+            "stored_status": run["status"], "derived_status": prog["status"],
+            "run_status": prog["status"], "progress": prog["percentage"], "percentage": prog["percentage"],
+            "percent": prog["percentage"], "completed": prog["completed"], "completed_count": prog["completed"],
+            "total": prog["total"], "total_agents": prog["total"],
+            "pending": prog.get("pending", 0), "failed": prog.get("failed", 0), "blocked": prog.get("blocked", 0),
             "current_iteration": run["current_iteration"],
             "iteration": run["current_iteration"],
-            "next_agent": next_agent(exes),
-            "completed_agents": completed_agents(exes),
-            "pending_agents": [e["agent"] for e in exes
-                               if e["status"] != "COMPLETED"],
-            "consensus": consensus_for(run), "run": payload,
+            "next_agent": prog.get("next_agent"),
+            "completed_agents": prog.get("completed_agents", completed_agents(exes)),
+            "pending_agents": prog.get("pending_agents", [e["agent"] for e in exes if e["status"] != "COMPLETED"]),
+            "blocked_agents": [e["agent"] for e in exes if e["status"] == "BLOCKED"],
+            "failed_agents": [e["agent"] for e in exes if e["status"] == "FAILED"],
+            "consensus": consensus_for(run), "run": payload, "progress_detail": prog,
         })
+
+    @app.route("/api/runs/<run_id>/archive", methods=["POST"])
+    def archive_run(run_id):
+        run, failure = get_run_or_404(run_id)
+        if failure:
+            return failure
+        exes = current_exes(run)
+        derived = _wf.derive_run_status(run, exes) if _wf is not None else run.get("status")
+        if derived != "COMPLETED":
+            return err(f"can only archive a COMPLETED run (current derived: {derived})", 409)
+        try:
+            db.set_run_status(run_id, "ARCHIVED", project)
+        except ValueError as exc:
+            return err(str(exc), 409)
+        payload = run_payload(db.get_run(run_id, project), current_exes(db.get_run(run_id, project)))
+        return jsonify({**payload, "run": payload})
 
     # -- generate / save ------------------------------------------------------
 
@@ -518,7 +575,31 @@ def create_app(project="."):
         exes = current_exes(run)
         problem = check_sequence(exes, agent)
         if problem:
-            return err(problem, 409)
+            # Dependencies not satisfied -> BLOCKED (recoverable), no fabrication
+            try:
+                cur = db.get_execution(run_id, agent, project=project)
+                if cur and cur.get("status") not in ("COMPLETED", "ARCHIVED"):
+                    db.set_execution_status(run_id, agent, "BLOCKED", project)
+            except Exception:
+                pass
+            return err(f"BLOCKED: {problem}", 409)
+        # context-level dependency check (e.g. Crow without TOP_HYPOTHESIS)
+        try:
+            if _ops is not None:
+                _preview = _ops.build_prompt_preview(agent, run, exes, raw_data=raw_data or "", top_hypothesis=top_hypothesis_for(run, exes), save=False, project=project)
+                if _preview.get("missing"):
+                    try:
+                        cur = db.get_execution(run_id, agent, project=project)
+                        if cur and cur.get("status") not in ("COMPLETED",):
+                            # keep PENDING but report blocked; do not fabricate prompt as complete
+                            pass
+                    except Exception:
+                        pass
+                    return jsonify(error="BLOCKED: missing required dependencies", agent=agent,
+                                   missing=_preview.get("missing", []), warnings=_preview.get("warnings", []),
+                                   prompt=_preview.get("prompt"), ok=False), 409
+        except Exception:
+            pass
         try:
             if _ops is not None:
                 payload = _ops.build_prompt_preview(agent, run, exes, raw_data=raw_data or "", top_hypothesis=top_hypothesis_for(run, exes), save=True, project=project)
@@ -647,7 +728,14 @@ def create_app(project="."):
         exes = current_exes(run)
         problem = check_sequence(exes, agent)
         if problem:
-            return None, err(problem, 409)
+            try:
+                cur = db.get_execution(run_id, agent, project=project)
+                if cur and cur.get("status") not in ("COMPLETED",):
+                    db.set_execution_status(run_id, agent, "BLOCKED", project)
+            except Exception:
+                pass
+            return None, err(f"BLOCKED: {problem}", 409)
+        overwrite = bool((data or {}).get("overwrite"))
         # Response validation: ranking needs winner signal if no top passed
         val_agent = agent
         ok, errors = db.validate_output(val_agent, output)
@@ -657,18 +745,26 @@ def create_app(project="."):
                 errors = [e for e in errors if "Top hypothesis" not in e]
                 ok = len(errors) == 0
         if strict_submit and not ok:
+            try:
+                db.mark_execution_failed(run_id, agent, reason=";".join(errors), project=project)
+            except Exception:
+                pass
             return None, (jsonify(error="Response validation failed", agent=agent, errors=errors, ok=False), 422)
-        # For save, surface validation as warnings but persist? Phase-5 says validate;
-        # save still blocks clearly-invalid (empty already blocked, placeholder-paste blocked)
         if not strict_submit and not ok:
-            # Block placeholder-paste + finch-invalid with 422; ranking winner-less is warning-only for save
             hard = [e for e in errors if "placeholder" in e.lower() or "finch" in e.lower() or "empty" in e.lower()]
             if hard:
+                try:
+                    db.mark_execution_failed(run_id, agent, reason=";".join(errors), project=project)
+                except Exception:
+                    pass
                 return None, (jsonify(error="Response validation failed", agent=agent, errors=errors, ok=False), 422)
             warnings = errors
         else:
             warnings = []
-        db.save_output(run_id, agent, output, project, top_hypothesis=top, raw_data=raw_data)
+        try:
+            db.save_output(run_id, agent, output, project, top_hypothesis=top, raw_data=raw_data, overwrite=overwrite)
+        except ValueError as exc:
+            return None, err(str(exc), 409)
         if top and agent == "ranking":
             db.save_top_hypothesis(run_id, top, project)
         execution = db.get_execution(run_id, agent, project=project)

@@ -33,13 +33,13 @@
     /** ---------- overview + timeline ---------- */
     function renderOverview() {
       var run = ctx.state.run || {}, exes = ctx.state.executions || [];
-      var counts = { completed: 0, ready: 0, waiting: 0, pending: 0, failed: 0 };
+      var counts = { completed: 0, ready: 0, waiting: 0, pending: 0, failed: 0, blocked: 0, archived: 0 };
       var nextId = null;
       for (var i = 0; i < exes.length; i++) {
         var s = String(exes[i].status || "PENDING").toUpperCase();
-        if ((s === "PENDING" || s === "FAILED") && !nextId) nextId = exes[i].agent;
+        if ((s === "PENDING" || s === "FAILED" || s === "BLOCKED" || s === "READY" || s === "WAITING_FOR_INPUT" || s === "WAITING") && !nextId) nextId = exes[i].agent;
       }
-      exes.forEach(function (e) { counts[ctx.normalize(e.status, e.agent === nextId)]++; });
+      exes.forEach(function (e) { var n = ctx.normalize(e.status, e.agent === nextId); if (counts[n] == null) counts[n] = 0; counts[n]++; });
       var total = Math.max(exes.length, 1), pct = Math.round((counts.completed / total) * 100);
       $("pct-complete").textContent = pct + "%";
       $("progress-fill").style.width = pct + "%";
@@ -48,9 +48,9 @@
       $("stat-ready").textContent = counts.ready + " ready";
       $("stat-waiting").textContent = counts.waiting + " waiting";
       $("stat-pending").textContent = counts.pending + " pending";
-      $("stat-failed").textContent = counts.failed + " failed";
+      $("stat-failed").textContent = counts.failed + " failed" + ((counts.blocked || 0) ? " · " + counts.blocked + " blocked" : "");
       $("meta-goal").textContent = run.goal || "—";
-      $("meta-status").textContent = run.status || "—";
+      $("meta-status").textContent = run.derived_status || run.canonical_status || run.status || "—";
       var iter = run.current_iteration || run.iteration || 1;
       $("meta-iteration").textContent = String(iter);
       $("meta-created").textContent = run.created_at || "—";
@@ -58,7 +58,7 @@
       /* top nav */
       $("nav-mission").textContent = run.goal ? (run.goal.length > 60 ? run.goal.slice(0, 60) + "…" : run.goal) : "No mission selected";
       $("nav-run-id").textContent = ctx.state.runId || "";
-      $("nav-status").textContent = run.status || "—";
+      $("nav-status").textContent = run.derived_status || run.canonical_status || run.status || "—";
       $("nav-iteration").textContent = "Iter " + iter;
       /* timeline */
       var tl = $("timeline-list"), evs = (ctx.state.executions || []).slice().sort(function (a, b) {
@@ -250,6 +250,16 @@
         if (item && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); ctx.selectRun(item.dataset.run); }
       });
     }
+    var arcBtn = $("archive-btn");
+    if (arcBtn) arcBtn.addEventListener("click", function () {
+      var msgEl = $("archive-msg");
+      if (!ctx.state.runId) { if (msgEl) msgEl.textContent = "No mission selected."; return; }
+      if (msgEl) msgEl.textContent = "Archiving…";
+      ctx.api.archive(ctx.state.runId).then(function () {
+        if (msgEl) msgEl.textContent = "Archived.";
+        ctx.refresh();
+      }).catch(function (err) { if (msgEl) msgEl.textContent = "Archive failed: " + err.message; });
+    });
     var cmp2 = $("compare-btn");
     if (cmp2) cmp2.addEventListener("click", function () {
       var a = (ctx.state.runs || []).filter(function (r) { return r.id === $("compare-a").value; })[0] || {};

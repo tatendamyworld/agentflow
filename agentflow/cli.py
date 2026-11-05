@@ -101,7 +101,7 @@ def paste(run_id, editor, yes):
         console.print("[red]Empty input — not saved.[/red]"); return
     if not yes and not click.confirm("Save this output?"):
         console.print("[yellow]Cancelled — nothing saved.[/yellow]"); return
-    db.save_output(run["id"], agent, text, PROJECT)
+    db.save_output(run["id"], agent, text, PROJECT, overwrite=True)  # Phase 6: explicit confirm (above) = overwrite consent; prior is archived
     console.print(f"[green]Saved {agent} output.[/green] Run [bold]agentflow next[/bold] for the following agent.")
 
 @main.command()

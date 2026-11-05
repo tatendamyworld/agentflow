@@ -105,6 +105,8 @@
         <li><span class="legend-swatch sw-waiting"></span>Waiting</li>
         <li><span class="legend-swatch sw-completed"></span>Completed</li>
         <li><span class="legend-swatch sw-failed"></span>Failed</li>
+        <li><span class="legend-swatch sw-blocked"></span>Blocked</li>
+        <li><span class="legend-swatch sw-archived"></span>Archived</li>
         <li><span class="legend-swatch sw-selected"></span>Selected</li>
       </ul>
     </section>
@@ -187,6 +189,8 @@
             <select id="compare-b" aria-label="Compare run B"></select>
           </label>
           <button type="button" id="compare-btn" class="btn btn-ghost btn-small">Compare</button>
+          <button type="button" id="archive-btn" class="btn btn-ghost btn-small" title="Archive selected run (COMPLETED -> ARCHIVED, terminal)">Archive</button>
+          <span id="archive-msg" class="muted small" role="status"></span>
         </div>
       </div>
       <div id="history-list" class="history-list"><p class="muted">No history loaded.</p></div>

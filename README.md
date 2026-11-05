@@ -116,3 +116,22 @@ Response validation:
 
 Tests: `tests/test_operations.py` (18 tests) covers dependencies, substitution, warnings,
 preview, copy, submit/save validation, timestamps, history, retry. Full suite: `pytest tests/` (46 passed).
+
+## PHASE 6 — Workflow State Management
+
+Reliable state machine in `agentflow/workflow.py`. Canonical run states:
+`CREATED, READY, IN_PROGRESS, WAITING_FOR_INPUT, COMPLETED, FAILED, BLOCKED, ARCHIVED`
+(legacy `CONSENSUS_REACHED`→`COMPLETED`, `SPLIT`→`BLOCKED`, `WAITING_FOR_FINCH/TOP_HYPOTHESIS`→`WAITING_FOR_INPUT`).
+
+Rules enforced:
+- Dependencies first: out-of-order generate/save persist `BLOCKED` (409, recoverable), no fabrication.
+- `POST /generate` → `WAITING_FOR_INPUT`, never `COMPLETED`; `POST /save|/submit` with valid response → `COMPLETED`.
+- Invalid (422) → `FAILED`, output never persisted, step stays executable.
+- Overwrite guard: saving over `COMPLETED` without `overwrite:true` → 409; explicit overwrite archives prior to `execution_history`.
+- Retry archives target + downstream to `execution_history` before reset (previous execution preserved); Finch re-runs archive to `finch_history`.
+- Dashboard reflects DB truth: `GET /api/runs/:id/status` derives canonical status + `compute_progress()` (completed/total/percentage/next/blocked/failed) on every read; frontend normalizes `BLOCKED/ARCHIVED` and shows derived status.
+- Progress: `GET /api/runs/:id/status`, `GET /api/runs/:id`, `GET /api/runs` (per-mission progress).
+- Multiple missions: independent `runs` rows; `GET /api/runs` lists each with own progress; completing one never touches another.
+- Archive: `POST /api/runs/:id/archive` (`COMPLETED` → `ARCHIVED`, terminal).
+
+Tests: `tests/test_workflow_state.py` (16 tests). Full suite (`pytest tests/`): 62 passed.

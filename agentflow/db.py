@@ -7,7 +7,10 @@ AGENT_NAMES = {
     "reflection": "Reflection", "evolution": "Evolution", "ranking": "Ranking",
     "crow": "Crow", "falcon": "Falcon", "finch": "Finch",
 }
-WORKFLOW_STATES = ["CREATED","IN_PROGRESS","WAITING_FOR_INPUT","WAITING_FOR_TOP_HYPOTHESIS","WAITING_FOR_FINCH","CONSENSUS_REACHED","SPLIT","COMPLETED","ARCHIVED"]
+WORKFLOW_STATES = ["CREATED","READY","IN_PROGRESS","WAITING_FOR_INPUT","COMPLETED","FAILED","BLOCKED","ARCHIVED","WAITING_FOR_TOP_HYPOTHESIS","WAITING_FOR_FINCH","CONSENSUS_REACHED","SPLIT"]
+
+from agentflow.workflow import (KNOWN_RUN_STATES, KNOWN_EXEC_STATES, normalize_run_status,
+    normalize_exec_status, can_transition_run, can_transition_exec)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -29,6 +32,18 @@ CREATE TABLE IF NOT EXISTS consensus (
   id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, iteration INTEGER NOT NULL,
   yes_count INTEGER, no_count INTEGER, inconclusive_count INTEGER, invalid_count INTEGER,
   outcome TEXT, detail TEXT, created_at TEXT,
+  FOREIGN KEY (run_id) REFERENCES runs(id)
+);
+CREATE TABLE IF NOT EXISTS execution_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, iteration INTEGER NOT NULL,
+  agent TEXT NOT NULL, prompt TEXT, output TEXT, status TEXT NOT NULL,
+  top_hypothesis TEXT, raw_data TEXT, created_at TEXT, updated_at TEXT,
+  archived_at TEXT, archive_reason TEXT,
+  FOREIGN KEY (run_id) REFERENCES runs(id)
+);
+CREATE TABLE IF NOT EXISTS finch_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, iteration INTEGER NOT NULL,
+  total_runs INTEGER, votes_json TEXT, outcome TEXT, created_at TEXT,
   FOREIGN KEY (run_id) REFERENCES runs(id)
 );
 """
@@ -73,8 +88,27 @@ def list_runs(project="."):
     rows = con.execute("SELECT * FROM runs ORDER BY created_at").fetchall()
     con.close(); return [dict(r) for r in rows]
 
-def set_run_status(rid, status, project="."):
+def set_run_status(rid, status, project=".", force=False):
+    """Persist run status with transition validation.
+
+    Transitions are enforced via agentflow.workflow.RUN_TRANSITIONS,
+    unless force=True (derived sync / legacy CLI bootstrap paths).
+    """
     assert status in WORKFLOW_STATES, f"invalid state {status}"
+    run = get_run(rid, project)
+    assert run, "run not found"
+    cur = run["status"]
+    tgt = normalize_run_status(status)
+    cur_n = normalize_run_status(cur)
+    # ARCHIVED is terminal: only no-op allowed
+    if cur_n == "ARCHIVED" and tgt != "ARCHIVED":
+        raise ValueError(f"Illegal run transition {cur} -> {status} (ARCHIVED is terminal)")
+    # Allow no-op and derive-driven backward moves? Enforce via map but
+    # permit sync to derived state even if stored is stale (force internal).
+    if not force and cur != status and not can_transition_run(cur, status):
+        # Also accept normalized comparison (e.g. CONSENSUS_REACHED->COMPLETED)
+        if not can_transition_run(cur_n, tgt):
+            raise ValueError(f"Illegal run transition {cur} -> {status}")
     con = _connect(project)
     con.execute("UPDATE runs SET status=?, updated_at=? WHERE id=?", (status, _now(), rid))
     con.commit(); con.close()
@@ -100,47 +134,75 @@ def next_pending(rid, project="."):
     if not run: return None
     exes = get_executions(rid, iteration=run["current_iteration"], project=project)
     for e in exes:
-        if e["status"] in ("PENDING", "WAITING", "FAILED"):
+        if e["status"] in ("PENDING", "READY", "IN_PROGRESS", "WAITING", "WAITING_FOR_INPUT", "FAILED", "BLOCKED"):
             return e
     return None
 
-def save_output(rid, agent, output, project=".", top_hypothesis=None, raw_data=None):
+def save_output(rid, agent, output, project=".", top_hypothesis=None, raw_data=None, overwrite=False):
+    """Save a *validated* response -> execution COMPLETED. Invalid callers
+    must validate first (db.validate_output) and must NOT call this on
+    failure, so invalid responses stay recoverable (FAILED, no output).
+
+    Overwrite guard: a COMPLETED slot with real output refuses silent
+    overwrite unless overwrite=True (explicit user confirmation). The
+    previous version is archived to execution_history on overwrite.
+    Run status is then re-derived (COMPLETED if all 9 done, else IN_PROGRESS).
+    """
     run = get_run(rid, project)
     assert run, "run not found"
     con = _connect(project)
     cur = con.execute("SELECT * FROM executions WHERE run_id=? AND agent=? AND iteration=?", (rid, agent, run["current_iteration"])).fetchone()
     assert cur, f"no execution slot for {agent}"
-    # guard against silent overwrite: require explicit overwrite flag via status check
-    if cur["output"] and cur["output"].strip() and cur["status"] == "COMPLETED":
-        # still allow with explicit confirmation handled by CLI (CLI confirms); record anyway
-        pass
+    if cur["output"] and str(cur["output"]).strip() and normalize_exec_status(cur["status"]) == "COMPLETED" and not overwrite:
+        con.close()
+        raise ValueError(f"refusing to silently overwrite completed {agent} output — use RETRY STEP to preserve it (or pass overwrite=true explicitly)")
+    if cur["output"] and str(cur["output"]).strip() and overwrite:
+        con.execute("INSERT INTO execution_history(run_id,iteration,agent,prompt,output,status,top_hypothesis,raw_data,created_at,updated_at,archived_at,archive_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (cur["run_id"], cur["iteration"], cur["agent"], cur["prompt"], cur["output"], cur["status"], cur["top_hypothesis"], cur["raw_data"], cur["created_at"], cur["updated_at"], _now(), "overwritten"))
     con.execute("UPDATE executions SET output=?, status='COMPLETED', prompt=COALESCE(prompt,?), top_hypothesis=COALESCE(?,top_hypothesis), raw_data=COALESCE(?,raw_data), updated_at=? WHERE id=?",
                 (output, cur["prompt"], top_hypothesis, raw_data, _now(), cur["id"]))
-    # advance status
-    con.execute("UPDATE runs SET status='IN_PROGRESS', updated_at=? WHERE id=?", (_now(), rid))
     con.commit(); con.close()
+    sync_run_status(rid, project)
 
 def save_prompt(rid, agent, prompt, project="."):
+    """Persist generated prompt. Generating does NOT complete the agent:
+    slot becomes WAITING_FOR_INPUT (awaiting paste), run re-derived."""
     run = get_run(rid, project)
     assert run
     con = _connect(project)
-    con.execute("UPDATE executions SET prompt=?, updated_at=? WHERE run_id=? AND agent=? AND iteration=?",
-                (prompt, _now(), rid, agent, run["current_iteration"]))
+    cur = con.execute("SELECT * FROM executions WHERE run_id=? AND agent=? AND iteration=?",
+                      (rid, agent, run["current_iteration"])).fetchone()
+    status = cur["status"] if cur else "PENDING"
+    # Only advance non-completed slots; never demote COMPLETED via generate
+    new_status = status if normalize_exec_status(status) == "COMPLETED" else "WAITING_FOR_INPUT"
+    con.execute("UPDATE executions SET prompt=?, status=?, updated_at=? WHERE run_id=? AND agent=? AND iteration=?",
+                (prompt, new_status, _now(), rid, agent, run["current_iteration"]))
     con.commit(); con.close()
+    sync_run_status(rid, project)
 
 def save_top_hypothesis(rid, text, project="."):
     run = get_run(rid, project); assert run
     con = _connect(project)
     con.execute("UPDATE executions SET top_hypothesis=?, updated_at=? WHERE run_id=? AND agent='ranking' AND iteration=?",
                 (text, _now(), rid, run["current_iteration"]))
-    con.execute("UPDATE runs SET status='IN_PROGRESS', updated_at=? WHERE id=?", (_now(), rid))
     con.commit(); con.close()
+    sync_run_status(rid, project)
 
 def save_finch_runs(rid, responses, project="."):
     run = get_run(rid, project); assert run
     from agentflow.consensus import parse_finch_vote
     con = _connect(project)
-    # clear old for this iteration then insert
+    old = con.execute("SELECT * FROM finch_runs WHERE run_id=? AND iteration=?", (rid, run["current_iteration"])).fetchall()
+    if old:
+        import json as _json
+        votes = [r["parsed_vote"] for r in old]
+        try:
+            outcome = _json.loads(old[0]["raw_response"]) if False else None
+        except Exception:
+            outcome = None
+        con.execute("INSERT INTO finch_history(run_id,iteration,total_runs,votes_json,outcome,created_at) VALUES(?,?,?,?,?,?)",
+                    (rid, run["current_iteration"], len(old), _json.dumps({"votes": votes, "responses": [r["raw_response"] for r in old]}), "superseded", _now()))
+    # archive + replace (previous finch votes preserved in finch_history)
     con.execute("DELETE FROM finch_runs WHERE run_id=? AND iteration=?", (rid, run["current_iteration"]))
     for i, r in enumerate(responses, 1):
         vote = parse_finch_vote(r)
@@ -162,9 +224,16 @@ def save_consensus(rid, result, project="."):
     con.execute("INSERT INTO consensus(run_id,iteration,yes_count,no_count,inconclusive_count,invalid_count,outcome,detail,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
                 (rid, run["current_iteration"], result["yes"], result["no"], result["inconclusive"], result["invalid"], result["outcome"], json.dumps(result), _now()))
     con.commit(); con.close()
-    # update run status: CONSENSUS_REACHED / SPLIT / COMPLETED stays? set per outcome
+    # Legacy outcome mapping + canonical sync: CONSENSUS -> COMPLETED path,
+    # SPLIT -> BLOCKED (needs more data). Stored legacy string kept for
+    # CLI compat; API derives canonical COMPLETED/BLOCKED.
     status = "CONSENSUS_REACHED" if result["outcome"].startswith("CONSENSUS") else "SPLIT"
-    set_run_status(rid, status, project)
+    stored = get_run(rid, project)
+    if stored and normalize_run_status(stored.get("status")) != "ARCHIVED":
+        try:
+            set_run_status(rid, status, project, force=False)
+        except ValueError:
+            set_run_status(rid, status, project, force=True)
 
 def get_consensus(rid, iteration=None, project="."):
     con = _connect(project)
@@ -189,24 +258,110 @@ def new_iteration(rid, project="."):
 
 
 def get_execution_history(rid, agent=None, project="."):
-    """Previous execution history — every row for a run (all iterations), oldest first.
+    """Previous execution history — every row for a run (all iterations) PLUS
+    archived retry/overwrite snapshots, oldest first. Filter by agent when given."""
+    con = _connect(project)
+    try:
+        current = con.execute(
+            "SELECT * FROM executions WHERE run_id=? ORDER BY iteration, id" if not agent else "SELECT * FROM executions WHERE run_id=? AND agent=? ORDER BY iteration, id",
+            (rid, agent) if agent else (rid,)).fetchall()
+        archived = con.execute(
+            "SELECT * FROM execution_history WHERE run_id=? ORDER BY id" if not agent else "SELECT * FROM execution_history WHERE run_id=? AND agent=? ORDER BY id",
+            (rid, agent) if agent else (rid,)).fetchall()
+    finally:
+        con.close()
+    merged = [dict(r) for r in current] + [dict(r) for r in archived]
+    merged.sort(key=lambda e: (e.get("iteration", 1), e.get("updated_at") or "", e.get("id", 0)))
+    return merged
 
-    Filter by agent when given. Caller gets timestamps + status so the UI
-    can render execution history (phase 5).
-    """
+
+def get_archived_executions(rid, agent=None, project="."):
     con = _connect(project)
     try:
         if agent:
-            rows = con.execute(
-                "SELECT * FROM executions WHERE run_id=? AND agent=? ORDER BY iteration, id",
-                (rid, agent)).fetchall()
+            rows = con.execute("SELECT * FROM execution_history WHERE run_id=? AND agent=? ORDER BY id", (rid, agent)).fetchall()
         else:
-            rows = con.execute(
-                "SELECT * FROM executions WHERE run_id=? ORDER BY iteration, id",
-                (rid,)).fetchall()
+            rows = con.execute("SELECT * FROM execution_history WHERE run_id=? ORDER BY id", (rid,)).fetchall()
     finally:
         con.close()
     return [dict(r) for r in rows]
+
+
+def archive_execution_row(row, reason, project="."):
+    con = _connect(project)
+    try:
+        con.execute("INSERT INTO execution_history(run_id,iteration,agent,prompt,output,status,top_hypothesis,raw_data,created_at,updated_at,archived_at,archive_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (row["run_id"], row["iteration"], row["agent"], row["prompt"], row["output"], row["status"], row["top_hypothesis"], row["raw_data"], row["created_at"], row["updated_at"], _now(), reason))
+        con.commit()
+    finally:
+        con.close()
+
+
+def mark_execution_failed(rid, agent, reason="", project="."):
+    """Invalid response -> FAILED (recoverable, output untouched)."""
+    run = get_run(rid, project); assert run
+    if agent not in AGENTS_ORDER:
+        raise ValueError(f"unknown agent {agent}")
+    con = _connect(project)
+    cur = con.execute("SELECT * FROM executions WHERE run_id=? AND agent=? AND iteration=?",
+                      (rid, agent, run["current_iteration"])).fetchone()
+    assert cur, f"no execution slot for {agent}"
+    if normalize_exec_status(cur["status"]) == "COMPLETED":
+        con.close(); raise ValueError(f"cannot mark completed {agent} FAILED — use RETRY")
+    con.execute("UPDATE executions SET status='FAILED', updated_at=? WHERE id=?", (_now(), cur["id"]))
+    con.commit(); con.close()
+    sync_run_status(rid, project)
+    return get_execution(rid, agent, project=project)
+
+
+def set_execution_status(rid, agent, status, project="."):
+    run = get_run(rid, project); assert run
+    if agent not in AGENTS_ORDER:
+        raise ValueError(f"unknown agent {agent}")
+    if normalize_exec_status(status) not in KNOWN_EXEC_STATES:
+        raise ValueError(f"invalid execution state {status}")
+    con = _connect(project)
+    cur = con.execute("SELECT * FROM executions WHERE run_id=? AND agent=? AND iteration=?",
+                      (rid, agent, run["current_iteration"])).fetchone()
+    assert cur
+    err = None
+    if not can_transition_exec(cur["status"], status):
+        # Still allow administrative FAILED/BLOCKED marking from any non-COMPLETED
+        if not (normalize_exec_status(cur["status"]) != "COMPLETED" and normalize_exec_status(status) in ("FAILED", "BLOCKED")):
+            con.close(); raise ValueError(f"Illegal execution transition {cur['status']} -> {status}")
+    con.execute("UPDATE executions SET status=?, updated_at=? WHERE id=?", (status, _now(), cur["id"]))
+    con.commit(); con.close()
+    sync_run_status(rid, project)
+    return get_execution(rid, agent, project=project)
+
+
+def sync_run_status(rid, project="."):
+    """Re-derive run status from DB truth and persist (force, bypasses
+    transition map since this is sync, not user transition)."""
+    from agentflow.workflow import derive_run_status
+    run = get_run(rid, project)
+    if not run or normalize_run_status(run.get("status")) == "ARCHIVED":
+        return (run or {}).get("status")
+    exes = get_executions(rid, iteration=run["current_iteration"], project=project)
+    cons = None
+    try:
+        cons = get_consensus(rid, project=project)
+    except Exception:
+        cons = None
+    derived = derive_run_status(run, exes, consensus=cons, stored=run.get("status"))
+    if derived != run.get("status"):
+        con = _connect(project)
+        con.execute("UPDATE runs SET status=?, updated_at=? WHERE id=?", (derived, _now(), rid))
+        con.commit(); con.close()
+    return derived
+
+
+def progress_for(rid, project="."):
+    from agentflow.workflow import compute_progress
+    run = get_run(rid, project); assert run
+    exes = get_executions(rid, iteration=run["current_iteration"], project=project)
+    cons = get_consensus(rid, project=project)
+    return compute_progress(run, exes, consensus=cons)
 
 
 def retry_execution(rid, agent, project=".", clear_output=True):
@@ -228,6 +383,13 @@ def retry_execution(rid, agent, project=".", clear_output=True):
             "SELECT * FROM executions WHERE run_id=? AND agent=? AND iteration=?",
             (rid, agent, run["current_iteration"])).fetchone()
         assert cur, f"no execution slot for {agent}"
+        # Phase 6: retry must preserve previous execution(s) — archive first
+        for arch_agent in downstream:
+            row = con.execute("SELECT * FROM executions WHERE run_id=? AND agent=? AND iteration=?",
+                              (rid, arch_agent, run["current_iteration"])).fetchone()
+            if row and (row["prompt"] or row["output"]):
+                con.execute("INSERT INTO execution_history(run_id,iteration,agent,prompt,output,status,top_hypothesis,raw_data,created_at,updated_at,archived_at,archive_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (row["run_id"], row["iteration"], row["agent"], row["prompt"], row["output"], row["status"], row["top_hypothesis"], row["raw_data"], row["created_at"], row["updated_at"], _now(), "retry"))
         for down_agent in downstream:
             row = con.execute(
                 "SELECT id FROM executions WHERE run_id=? AND agent=? AND iteration=?",
